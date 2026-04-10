@@ -41,10 +41,11 @@ El sistema inicia en un estado limpio de producción. Utiliza las siguientes cre
 
 ---
 ## commit
-
+```bash
 git add .
 git commit -m "Corregir build de Vercel y uso de Suspense en register"
 git push origin main
+```
 
 ## 🛠️ Arquitectura Técnica
 
