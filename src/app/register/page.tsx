@@ -32,6 +32,32 @@ const secondaryButtonClassName =
   'flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-sm font-medium normal-case text-slate-500 transition-all hover:bg-slate-50 active:scale-[0.99]';
 
 export default function RegisterPage() {
+  return (
+    <React.Suspense fallback={<RegisterPageFallback />}>
+      <RegisterPageContent />
+    </React.Suspense>
+  );
+}
+
+function RegisterPageFallback() {
+  return (
+    <main className="min-h-screen bg-[#f3f5f9] p-3 sm:p-4 lg:p-5">
+      <div className="mx-auto flex min-h-[calc(100vh-1.5rem)] max-w-[980px] items-center justify-center rounded-[22px] bg-white shadow-[0_20px_50px_-28px_rgba(15,23,42,0.22)] sm:min-h-[560px]">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <div className="flex size-14 items-center justify-center rounded-full bg-[#edf3ff] text-[#1d57b7]">
+            <AppLogo className="size-7" />
+          </div>
+          <div>
+            <p className="text-base font-semibold text-slate-800">Certificador</p>
+            <p className="mt-1 text-sm text-slate-500">Cargando formulario...</p>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function RegisterPageContent() {
   const searchParams = useSearchParams();
   const [username, setUsername] = React.useState('');
   const [phone, setPhone] = React.useState('');

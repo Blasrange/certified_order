@@ -40,6 +40,11 @@ El sistema inicia en un estado limpio de producción. Utiliza las siguientes cre
 *Nota: Una vez ingreses, podrás crear nuevos usuarios, roles y configurar los propietarios de carga en el módulo de Administración.*
 
 ---
+## commit
+
+git add .
+git commit -m "Corregir build de Vercel y uso de Suspense en register"
+git push origin main
 
 ## 🛠️ Arquitectura Técnica
 
