@@ -35,6 +35,7 @@ export type User = {
   email: string;
   avatar: string;
   role: Role;
+  isSystemAdmin?: boolean;
   password?: string;
   documentType?: string;
   documentNumber?: string;
@@ -91,6 +92,7 @@ export type OrderGroup = {
 
 export type GroupedOrder = {
   id: string;
+  dbId?: string;
   name: string;
   type: 'Nacional' | 'Exportación';
   certificationDate: string;
@@ -108,6 +110,7 @@ export type Customer = {
   id: string;
   name: string;
   nit: string;
+  originalNit?: string;
   city: string;
   address: string;
   phone?: string;
@@ -119,6 +122,7 @@ export type Store = {
   id: string;
   name: string;
   code: string;
+  originalCode?: string;
   city: string;
   address: string;
   phone?: string;

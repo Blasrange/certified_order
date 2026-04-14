@@ -37,9 +37,13 @@ import PrintTagModal from "./PrintTagModal";
 import * as XLSX from "xlsx";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/auth-context";
+import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
 
 const ReferralsPanel = () => {
   const { toast } = useToast();
+  const { currentUser } = useAuth();
+  const appData = useFilteredAppData(currentUser);
   const [referrals, setReferrals] = useState<(OrderGroup & { processName: string; processId: string })[]>([]);
   const [owners, setOwners] = useState<Owner[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -52,45 +56,36 @@ const ReferralsPanel = () => {
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
   const loadData = () => {
-    if (typeof window === 'undefined') return;
-    
-    const savedOwners = localStorage.getItem('owners');
-    const parsedOwners = savedOwners ? JSON.parse(savedOwners) : mockOwners;
+    const parsedOwners = appData.owners.length > 0 ? appData.owners : mockOwners;
     setOwners(parsedOwners);
 
-    const saved = localStorage.getItem('groupedProcesses');
-    if (saved) {
-      const allProcesses: GroupedOrder[] = JSON.parse(saved);
-      const orders: (OrderGroup & { processName: string; processId: string })[] = [];
-      
-      allProcesses.forEach(process => {
-        process.orders.forEach(order => {
-          if (order.isFinalized && (order.status === 'verified' || order.status === 'partial')) {
-            orders.push({
-              ...order,
-              ownerId: process.ownerId,
-              processName: process.name,
-              processId: process.id
-            });
-          }
-        });
-      });
+    const orders: (OrderGroup & { processName: string; processId: string })[] = [];
 
-      orders.sort((a, b) => {
-        const dateA = a.finalizedAt ? new Date(a.finalizedAt).getTime() : 0;
-        const dateB = b.finalizedAt ? new Date(b.finalizedAt).getTime() : 0;
-        return dateB - dateA;
+    appData.groupedProcesses.forEach(process => {
+      process.orders.forEach(order => {
+        if (order.isFinalized && (order.status === 'verified' || order.status === 'partial')) {
+          orders.push({
+            ...order,
+            ownerId: process.ownerId,
+            processName: process.name,
+            processId: process.id
+          });
+        }
       });
+    });
 
-      setReferrals(orders);
-    }
+    orders.sort((a, b) => {
+      const dateA = a.finalizedAt ? new Date(a.finalizedAt).getTime() : 0;
+      const dateB = b.finalizedAt ? new Date(b.finalizedAt).getTime() : 0;
+      return dateB - dateA;
+    });
+
+    setReferrals(orders);
   };
 
   useEffect(() => {
     loadData();
-    window.addEventListener('storage', loadData);
-    return () => window.removeEventListener('storage', loadData);
-  }, []);
+  }, [appData.groupedProcesses, appData.owners]);
 
   const filteredReferrals = useMemo(() => {
     return referrals.filter(order => 
@@ -148,8 +143,8 @@ const ReferralsPanel = () => {
     XLSX.writeFile(wb, fileName);
 
     toast({
-      title: "Exportación exitosa",
-      description: `Se han exportado ${exportData.length} líneas de detalle logístico.`,
+      title: "Remisiones exportadas",
+      description: `Se exportaron ${exportData.length} líneas de detalle logístico en el archivo consolidado.`,
     });
   };
 
@@ -160,14 +155,16 @@ const ReferralsPanel = () => {
 
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <Card className="border border-muted/20 shadow-sm bg-white rounded-xl overflow-hidden">
-        <CardContent className="p-3 flex items-center justify-between">
+      
+      {/* Header con búsqueda - consistente con OrdersPanel */}
+      <Card className="border border-slate-100 shadow-sm bg-white rounded-xl overflow-hidden">
+        <CardContent className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-4 flex-1">
-            <div className="relative group">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
               <Input 
                 placeholder="Buscar por Pedido, NIT o Cliente..." 
-                className="pl-10 h-9 w-96 bg-slate-50 border-none font-bold text-xs"
+                className="pl-10 h-10 w-96 bg-slate-50 border-slate-200 text-sm font-medium rounded-xl"
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
@@ -175,37 +172,46 @@ const ReferralsPanel = () => {
                 }}
               />
             </div>
-            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg text-slate-400 hover:text-primary">
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="h-9 w-9 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10"
+            >
               <Filter className="size-4" />
             </Button>
           </div>
           <Button 
             onClick={handleExportConsolidated}
-            className="bg-primary/10 text-primary border border-primary/10 hover:bg-primary/20 font-black gap-2 px-6 rounded-lg h-9 text-xs shadow-none"
+            className="bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 font-semibold gap-2 px-5 rounded-xl h-10 text-sm shadow-none transition-all duration-200"
           >
             <FileSpreadsheet className="size-4" /> Exportar Consolidado
           </Button>
         </CardContent>
       </Card>
 
-      <Card className="border border-muted/20 shadow-sm overflow-hidden bg-white rounded-2xl">
+      {/* Tabla de remisiones - mejorada */}
+      <Card className="border border-slate-100 shadow-sm overflow-hidden bg-white rounded-xl">
         <CardContent className="p-0">
           <Table>
-            <TableHeader className="bg-muted/5 h-14">
-              <TableRow>
-                <TableHead className="pl-8 text-[13px] font-black">Id Pedido / PO</TableHead>
-                <TableHead className="text-[13px] font-black">Socio Comercial</TableHead>
-                <TableHead className="text-[13px] font-black">Punto Entrega</TableHead>
-                <TableHead className="text-center text-[13px] font-black">Cajas</TableHead>
-                <TableHead className="text-center text-[13px] font-black">Estado Cierre</TableHead>
-                <TableHead className="pr-8 text-right text-[13px] font-black">Acciones</TableHead>
+            <TableHeader className="bg-slate-50/80">
+              <TableRow className="border-b border-slate-100">
+                <TableHead className="pl-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">ID Pedido / PO</TableHead>
+                <TableHead className="py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Socio Comercial</TableHead>
+                <TableHead className="py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Punto Entrega</TableHead>
+                <TableHead className="py-4 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Cajas</TableHead>
+                <TableHead className="py-4 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Estado Cierre</TableHead>
+                <TableHead className="pr-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Acciones</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginatedReferrals.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-64 text-center text-muted-foreground italic font-bold opacity-30">
-                    No hay remisiones listas para despacho en este momento.
+                  <TableCell colSpan={6} className="h-80 text-center">
+                    <div className="flex flex-col items-center justify-center text-slate-400 font-medium">
+                      <Package className="size-12 mb-3 text-slate-300" />
+                      <p className="text-sm font-medium">No hay remisiones listas para despacho</p>
+                      <p className="text-xs text-slate-400 mt-1">Las certificaciones finalizadas aparecerán aquí</p>
+                    </div>
                   </TableCell>
                 </TableRow>
               ) : (
@@ -214,17 +220,17 @@ const ReferralsPanel = () => {
                   const totalUnits = order.items.reduce((acc, i) => acc + i.quantity, 0);
                   
                   return (
-                    <TableRow key={idx} className="group hover:bg-muted/5 h-16 transition-colors border-b last:border-none">
-                      <TableCell className="pl-8 py-4">
+                    <TableRow key={idx} className="group hover:bg-slate-50/50 transition-colors border-b border-slate-50">
+                      <TableCell className="pl-6 py-4">
                         <div className="flex flex-col">
-                          <span className="font-mono text-[11px] font-black text-primary uppercase">{order.id}</span>
-                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">#{order.orderNumber}</span>
+                          <span className="font-mono text-[11px] font-bold text-primary uppercase">{order.id}</span>
+                          <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider mt-0.5">#{order.orderNumber}</span>
                         </div>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="py-4">
                         <div className="flex items-center gap-3">
-                          <div className="size-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500">
-                            <Building2 className="size-4" />
+                          <div className="size-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400">
+                            <Building2 className="size-3.5" />
                           </div>
                           <div className="flex flex-col">
                             <span className="font-bold text-[11px] text-slate-700 truncate max-w-[180px]">{order.customerName}</span>
@@ -232,10 +238,10 @@ const ReferralsPanel = () => {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="py-4">
                         <div className="flex items-center gap-3">
-                          <div className="size-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500">
-                            <StoreIcon className="size-4" />
+                          <div className="size-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400">
+                            <StoreIcon className="size-3.5" />
                           </div>
                           <div className="flex flex-col">
                             <span className="font-bold text-[11px] text-slate-700 truncate max-w-[180px]">{order.storeName}</span>
@@ -243,61 +249,61 @@ const ReferralsPanel = () => {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-center">
+                      <TableCell className="py-4 text-center">
                         <div className="flex flex-col items-center">
                           <div className="flex items-center gap-1.5">
                             <Package className="size-3.5 text-primary" />
-                            <span className="text-sm font-black text-slate-800">{order.totalBoxes}</span>
+                            <span className="text-sm font-bold text-slate-800">{order.totalBoxes}</span>
                           </div>
-                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-1">
+                          <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider mt-1">
                             {verifiedUnits}/{totalUnits} U
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-center">
-                        <Badge className={cn("text-[9px] font-black px-3 py-1 uppercase border shadow-none", 
-                          order.status === 'verified' ? "text-green-600 bg-green-50 border-green-100" : 
-                          "text-amber-600 bg-amber-50 border-amber-100")}>
+                      <TableCell className="py-4 text-center">
+                        <Badge className={cn("text-[9px] font-bold px-2.5 py-0.5 rounded-full border", 
+                          order.status === 'verified' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : 
+                          "bg-amber-50 text-amber-700 border-amber-100")}>
                           {order.status === 'verified' ? 'Completo' : 'Parcial'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="pr-8 text-right">
-                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                      <TableCell className="pr-6 py-4 text-right">
+                        <div className="flex justify-end gap-1">
                           <Button 
                             variant="ghost" 
                             size="icon" 
                             title="Vista Previa de Pedido"
-                            className="h-9 w-9 rounded-xl text-primary hover:bg-primary/10"
+                            className="h-8 w-8 rounded-lg text-primary hover:bg-primary/10"
                             onClick={() => {
                               setSelectedOrder(order);
                               setIsPreviewOpen(true);
                             }}
                           >
-                            <Eye className="size-4" />
+                            <Eye className="size-3.5" />
                           </Button>
                           <Button 
                             variant="ghost" 
                             size="icon" 
                             title="Etiqueta Térmica"
-                            className="h-9 w-9 rounded-xl text-amber-600 hover:bg-amber-50"
+                            className="h-8 w-8 rounded-lg text-amber-600 hover:bg-amber-50"
                             onClick={() => {
                               setSelectedOrder(order);
                               setIsTagOpen(true);
                             }}
                           >
-                            <Tag className="size-4" />
+                            <Tag className="size-3.5" />
                           </Button>
                           <Button 
                             variant="ghost" 
                             size="icon" 
                             title="Remisión de Despacho"
-                            className="h-9 w-9 rounded-xl text-slate-800 hover:bg-slate-100"
+                            className="h-8 w-8 rounded-lg text-slate-600 hover:bg-slate-100"
                             onClick={() => {
                               setSelectedOrder(order);
                               setIsPrintOpen(true);
                             }}
                           >
-                            <Printer className="size-4" />
+                            <Printer className="size-3.5" />
                           </Button>
                         </div>
                       </TableCell>
@@ -310,7 +316,8 @@ const ReferralsPanel = () => {
         </CardContent>
       </Card>
 
-      <Card className="border border-muted/20 shadow-sm bg-white rounded-2xl overflow-hidden mt-4">
+      {/* Paginación - SIEMPRE visible, igual que en el original */}
+      <Card className="border border-slate-100 shadow-sm bg-white rounded-xl overflow-hidden mt-4">
         <CardContent className="p-0">
           <DataTablePagination 
             totalRows={filteredReferrals.length}
@@ -323,6 +330,7 @@ const ReferralsPanel = () => {
         </CardContent>
       </Card>
 
+      {/* Modales */}
       {selectedOrder && (
         <OrderViewModal 
           orderGroup={selectedOrder}

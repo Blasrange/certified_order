@@ -1,7 +1,6 @@
-
 "use client";
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { 
   PlusCircle, 
   Pencil, 
@@ -46,6 +45,8 @@ import { mockOwners } from "@/lib/data";
 import { persistOwners } from "@/lib/app-data-client";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/auth-context";
+import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
 
 const OwnerForm = ({ owner, onSave, onCancel }: { owner: Partial<Owner> | null, onSave: (owner: any) => void, onCancel: () => void }) => {
   const [formData, setFormData] = useState<Partial<Owner>>({ 
@@ -60,54 +61,95 @@ const OwnerForm = ({ owner, onSave, onCancel }: { owner: Partial<Owner> | null, 
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(formData); }} className="flex flex-col h-full">
-      <div className="grid grid-cols-3 gap-x-4 gap-y-6 py-4">
+      <div className="grid grid-cols-1 gap-x-5 gap-y-5 py-2 md:grid-cols-2 xl:grid-cols-3">
         <div className="space-y-1.5">
-          <Label className="text-[11px] font-bold text-slate-700 pl-4 uppercase tracking-tighter">Nombre de la Empresa <span className="text-red-500">*</span></Label>
-          <Input id="name" value={formData.name || ''} onChange={handleChange} className="rounded-full h-11 px-5 text-xs font-bold bg-white border-slate-200 shadow-sm" required />
+          <Label className="text-xs font-semibold text-slate-700">Nombre de la empresa <span className="text-red-500">*</span></Label>
+          <Input 
+            id="name" 
+            value={formData.name || ''} 
+            onChange={handleChange} 
+            placeholder="Ej: Corporación Colombiana de Logística SAS"
+            className="rounded-xl h-11 text-sm font-medium bg-white border-slate-200" 
+            required 
+          />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-[11px] font-bold text-slate-700 pl-4 uppercase tracking-tighter">NIT / RUT <span className="text-red-500">*</span></Label>
-          <Input id="nit" value={formData.nit || ''} onChange={handleChange} className="rounded-full h-11 px-5 text-xs font-bold bg-slate-50 border-slate-200 shadow-inner" required />
+          <Label className="text-xs font-semibold text-slate-700">NIT / RUT <span className="text-red-500">*</span></Label>
+          <Input 
+            id="nit" 
+            value={formData.nit || ''} 
+            onChange={handleChange} 
+            placeholder="Ej: 901.123.456-7"
+            className="rounded-xl h-11 text-sm font-medium bg-white border-slate-200" 
+            required 
+          />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-[11px] font-bold text-slate-700 pl-4 uppercase tracking-tighter">Correo corporativo <span className="text-red-500">*</span></Label>
-          <Input id="email" type="email" value={formData.email || ''} onChange={handleChange} className="rounded-full h-11 px-5 text-xs font-bold bg-white border-slate-200 shadow-sm" required />
+          <Label className="text-xs font-semibold text-slate-700">Correo corporativo <span className="text-red-500">*</span></Label>
+          <Input 
+            id="email" 
+            type="email" 
+            value={formData.email || ''} 
+            onChange={handleChange} 
+            placeholder="Ej: contacto@cclogistica.com"
+            className="rounded-xl h-11 text-sm font-medium bg-white border-slate-200" 
+            required 
+          />
         </div>
-        
         <div className="space-y-1.5">
-          <Label className="text-[11px] font-bold text-slate-700 pl-4 uppercase tracking-tighter">Ciudad <span className="text-red-500">*</span></Label>
-          <Input id="city" value={formData.city || ''} onChange={handleChange} className="rounded-full h-11 px-5 text-xs font-bold bg-white border-slate-200 shadow-sm" required />
+          <Label className="text-xs font-semibold text-slate-700">Ciudad <span className="text-red-500">*</span></Label>
+          <Input 
+            id="city" 
+            value={formData.city || ''} 
+            onChange={handleChange} 
+            placeholder="Ej: Bogotá D.C."
+            className="rounded-xl h-11 text-sm font-medium bg-white border-slate-200" 
+            required 
+          />
         </div>
-        <div className="col-span-2 space-y-1.5">
-          <Label className="text-[11px] font-bold text-slate-700 pl-4 uppercase tracking-tighter">Dirección Fiscal <span className="text-red-500">*</span></Label>
-          <Input id="address" value={formData.address || ''} onChange={handleChange} className="rounded-full h-11 px-5 text-xs font-bold bg-white border-slate-200 shadow-sm" required />
-        </div>
-
         <div className="space-y-1.5">
-          <Label className="text-[11px] font-bold text-slate-700 pl-4 uppercase tracking-tighter">Teléfono de contacto</Label>
-          <Input id="phone" value={formData.phone || ''} onChange={handleChange} className="rounded-full h-11 px-5 text-xs font-bold bg-white border-slate-200 shadow-sm" />
+          <Label className="text-xs font-semibold text-slate-700">Dirección fiscal <span className="text-red-500">*</span></Label>
+          <Input 
+            id="address" 
+            value={formData.address || ''} 
+            onChange={handleChange} 
+            placeholder="Ej: Calle 100 # 15-20, Piso 8"
+            className="rounded-xl h-11 text-sm font-medium bg-white border-slate-200" 
+            required 
+          />
         </div>
-
-        <div className="col-span-2 flex items-center justify-between p-4 bg-slate-50 rounded-full border border-slate-100 shadow-inner h-11 self-end">
-          <div className="flex items-center gap-3 pl-2">
-            <Label className="text-[10px] font-black text-slate-800 uppercase tracking-tighter">Entidad Habilitada</Label>
-            <span className="text-[9px] text-slate-400 font-bold italic leading-none hidden sm:inline">Define si este propietario puede operar en el sistema</span>
+        <div className="space-y-1.5">
+          <Label className="text-xs font-semibold text-slate-700">Teléfono de contacto</Label>
+          <Input 
+            id="phone" 
+            value={formData.phone || ''} 
+            onChange={handleChange} 
+            placeholder="Ej: 601 7456789"
+            className="rounded-xl h-11 text-sm font-medium bg-white border-slate-200" 
+          />
+        </div>
+        <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100 md:col-span-2 xl:col-span-3">
+          <div className="flex items-center gap-3">
+            <Label className="text-xs font-semibold text-slate-700">Entidad habilitada</Label>
+            <span className="text-[10px] text-slate-400 font-medium">Define si puede operar en el sistema</span>
           </div>
           <div className="flex items-center gap-3">
-            <Switch checked={formData.isActive} onCheckedChange={(v) => setFormData(p => ({...p, isActive: v}))} className="scale-75" />
-            <Badge variant="outline" className={cn("text-[9px] font-black h-5 border-none lowercase", formData.isActive ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600")}>
-              {formData.isActive ? 'activo' : 'inactivo'}
+            <Switch checked={formData.isActive} onCheckedChange={(v) => setFormData(p => ({...p, isActive: v}))} />
+            <Badge variant="outline" className={cn("text-[9px] font-bold px-2 py-0.5 rounded-full border", 
+              formData.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-red-50 text-red-700 border-red-100"
+            )}>
+              {formData.isActive ? 'Activo' : 'Inactivo'}
             </Badge>
           </div>
         </div>
       </div>
 
-      <DialogFooter className="mt-12 gap-3 border-t pt-6 bg-slate-50/30 -mx-8 px-8 -mb-8 pb-8">
-        <Button type="button" variant="ghost" onClick={onCancel} className="font-bold rounded-full px-8 h-12 bg-primary/10 text-primary hover:bg-primary/20 gap-2">
-          <X className="size-5" /> Cancelar
+      <DialogFooter className="mt-8 gap-3 border-t pt-6">
+        <Button type="button" variant="ghost" onClick={onCancel} className="dialog-btn-secondary">
+          <X className="size-4" /> Cancelar
         </Button>
-        <Button type="submit" className="min-w-[180px] font-black rounded-full h-12 bg-primary text-white shadow-xl shadow-primary/20 gap-2 hover:scale-[1.02] transition-transform">
-          <Save className="size-5" /> Guardar Propietario
+        <Button type="submit" className="dialog-btn-primary">
+          <Save className="size-4 mr-2" /> Guardar Propietario
         </Button>
       </DialogFooter>
     </form>
@@ -116,17 +158,37 @@ const OwnerForm = ({ owner, onSave, onCancel }: { owner: Partial<Owner> | null, 
 
 const OwnersPanel = () => {
   const { toast } = useToast();
+  const { currentUser, refreshCurrentUser } = useAuth();
+  const appData = useFilteredAppData(currentUser);
   const [owners, setOwners] = useState<Owner[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingOwner, setEditingOwner] = useState<Partial<Owner> | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const pendingOwnerNitRef = useRef<string | null>(null);
+  const pendingOwnerIdRef = useRef<string | null>(null);
 
-  useEffect(() => { 
-    const saved = localStorage.getItem('owners'); 
-    setOwners(saved ? JSON.parse(saved) : mockOwners); 
-  }, []);
+  useEffect(() => {
+    if (appData.loading) {
+      return;
+    }
+
+    if (pendingOwnerNitRef.current || pendingOwnerIdRef.current) {
+      const ownerExistsInBootstrap = appData.owners.some((owner) =>
+        owner.nit === pendingOwnerNitRef.current || owner.id === pendingOwnerIdRef.current
+      );
+
+      if (!ownerExistsInBootstrap) {
+        return;
+      }
+
+      pendingOwnerNitRef.current = null;
+      pendingOwnerIdRef.current = null;
+    }
+
+    setOwners(appData.owners.length > 0 ? appData.owners : mockOwners);
+  }, [appData.loading, appData.owners]);
 
   const handleSave = async (data: any) => {
     const duplicateNit = owners.find(o => 
@@ -145,16 +207,27 @@ const OwnersPanel = () => {
     const updated = data.id 
       ? owners.map(o => o.id === data.id ? { ...o, ...data } : o) 
       : [{ ...data, id: `OWNER-${Date.now()}` }, ...owners];
-    
+
+    pendingOwnerNitRef.current = String(data.nit || '').trim();
+    pendingOwnerIdRef.current = String(data.id || updated[0]?.id || '').trim() || null;
     setOwners(updated);
+    setIsDialogOpen(false);
+    setEditingOwner(null);
+
     try {
       await persistOwners(updated);
-      toast({ title: "Propietario guardado", description: "El propietario fue guardado en la base de datos." });
+      await refreshCurrentUser();
+      await appData.refresh();
+      toast({
+        title: data.id ? "Propietario actualizado" : "Propietario creado",
+        description: `La información de ${data.name} fue guardada correctamente en la base de datos.`,
+      });
     } catch (error) {
       console.error('No se pudo sincronizar propietarios.', error);
-      toast({ variant: "destructive", title: "Sincronizacion pendiente", description: "El propietario se guardo localmente, pero no se pudo subir a la base de datos." });
+      pendingOwnerNitRef.current = null;
+      pendingOwnerIdRef.current = null;
+      toast({ variant: "destructive", title: "Sincronización pendiente", description: "Los datos del propietario se actualizaron en esta sesión, pero no fue posible enviarlos a la base de datos." });
     }
-    setIsDialogOpen(false);
   };
 
   const toggleStatus = async (owner: Owner) => {
@@ -163,10 +236,15 @@ const OwnersPanel = () => {
     setOwners(updated);
     try {
       await persistOwners(updated);
-      toast({ title: newStatus ? "Entidad activada" : "Entidad desactivada", description: "El cambio fue guardado en la base de datos." });
+      await refreshCurrentUser();
+      await appData.refresh();
+      toast({
+        title: newStatus ? "Propietario activado" : "Propietario desactivado",
+        description: `El estado de ${owner.name} fue actualizado correctamente.`,
+      });
     } catch (error) {
       console.error('No se pudo sincronizar propietarios.', error);
-      toast({ variant: "destructive", title: "Sincronizacion pendiente", description: "El cambio se aplico localmente, pero no se pudo subir a la base de datos." });
+      toast({ variant: "destructive", title: "Sincronización pendiente", description: "El cambio de estado se aplicó en pantalla, pero no fue posible sincronizarlo con la base de datos." });
     }
   };
 
@@ -184,84 +262,110 @@ const OwnersPanel = () => {
   , [filtered, currentPage, itemsPerPage]);
 
   return (
-    <div className="space-y-6">
-      <Card className="border border-muted/20 shadow-sm bg-white rounded-xl overflow-hidden">
-        <CardContent className="p-3 flex items-center justify-between">
+    <div className="space-y-4">
+      {/* Header con búsqueda - consistente con otros paneles */}
+      <Card className="border border-slate-100 shadow-sm bg-white rounded-xl overflow-hidden">
+        <CardContent className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-4 flex-1">
-            <div className="relative group">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
               <Input 
-                placeholder="Filtrar por nombre, NIT o correo..." 
-                className="pl-10 h-9 w-96 bg-slate-50 border-none font-bold text-xs" 
+                placeholder="Buscar por nombre, NIT o correo..." 
+                className="pl-10 h-10 w-96 bg-slate-50 border-slate-200 text-sm font-medium rounded-xl" 
                 value={searchTerm} 
                 onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} 
               />
             </div>
           </div>
-          <Button onClick={() => { setEditingOwner({ isActive: true }); setIsDialogOpen(true); }} className="bg-primary font-black shadow-md shadow-primary/20 gap-2 px-6 rounded-lg h-9 text-xs text-white uppercase tracking-tighter">
+          <Button 
+            onClick={() => { setEditingOwner({ isActive: true }); setIsDialogOpen(true); }} 
+            className="bg-gradient-to-r from-[#1d57b7] to-[#1a4a9e] text-white shadow-md shadow-primary/20 gap-2 px-5 rounded-xl h-10 text-sm font-semibold"
+          >
             <PlusCircle className="size-4" /> Nuevo Propietario
           </Button>
         </CardContent>
       </Card>
 
-      <Card className="border border-muted/20 shadow-sm bg-white overflow-hidden rounded-2xl">
+      {/* Tabla de propietarios - mejorada */}
+      <Card className="border border-slate-100 shadow-sm bg-white rounded-xl overflow-hidden">
         <CardContent className="p-0">
           <Table>
-            <TableHeader className="bg-muted/5 h-14">
-              <TableRow>
-                <TableHead className="pl-8 font-black text-[13px]">Empresa / NIT</TableHead>
-                <TableHead className="font-black text-[13px]">Contacto</TableHead>
-                <TableHead className="font-black text-[13px]">Ubicación</TableHead>
-                <TableHead className="text-center font-black text-[13px]">Estado</TableHead>
-                <TableHead className="text-right pr-8 font-black text-[13px]">Acciones</TableHead>
+            <TableHeader className="bg-slate-50/80">
+              <TableRow className="border-b border-slate-100">
+                <TableHead className="pl-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Empresa / NIT</TableHead>
+                <TableHead className="py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Contacto</TableHead>
+                <TableHead className="py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Ubicación</TableHead>
+                <TableHead className="py-4 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Estado</TableHead>
+                <TableHead className="pr-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Acciones</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginated.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-64 text-center text-muted-foreground italic font-bold opacity-30">No hay propietarios registrados.</TableCell>
+                  <TableCell colSpan={5} className="h-80 text-center">
+                    <div className="flex flex-col items-center justify-center text-slate-400 font-medium">
+                      <Building2 className="size-12 mb-3 text-slate-300" />
+                      <p className="text-sm font-medium">No hay propietarios registrados</p>
+                      <p className="text-xs text-slate-400 mt-1">Haz clic en "Nuevo Propietario" para agregar</p>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ) : (
                 paginated.map(o => (
-                  <TableRow key={o.id} className={cn("group hover:bg-muted/5 h-16 transition-colors border-b last:border-none", !o.isActive && "opacity-60")}>
-                    <TableCell className="pl-8 py-4">
+                  <TableRow key={o.id} className={cn("group hover:bg-slate-50/50 transition-colors border-b border-slate-50", !o.isActive && "opacity-60")}>
+                    <TableCell className="pl-6 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                          <Building2 className="size-5" />
+                        <div className="size-10 rounded-lg bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center text-primary">
+                          <Building2 className="size-4" />
                         </div>
                         <div className="flex flex-col">
-                          <span className="font-black text-[11px] text-slate-700 leading-tight">{o.name}</span>
-                          <span className="text-[10px] font-black text-primary tracking-tight mt-0.5">{o.nit}</span>
+                          <span className="font-bold text-sm text-slate-800 leading-tight">{o.name}</span>
+                          <span className="text-[10px] font-mono text-primary font-semibold mt-0.5">{o.nit}</span>
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
-                          <Mail className="size-3" /> {o.email}
+                    <TableCell className="py-4">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5">
+                          <Mail className="size-3 text-slate-400" />
+                          <span className="text-[11px] font-medium text-slate-600">{o.email}</span>
                         </div>
-                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 mt-1">
-                          <Phone className="size-3" /> {o.phone || 'N/A'}
+                        <div className="flex items-center gap-1.5">
+                          <Phone className="size-3 text-slate-400" />
+                          <span className="text-[11px] font-medium text-slate-500">{o.phone || 'No registrado'}</span>
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <div className="flex items-center gap-1 text-[11px] font-bold text-slate-600">
-                          <MapPin className="size-3 text-primary" /> {o.city}
+                    <TableCell className="py-4">
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-1">
+                          <MapPin className="size-3 text-primary" />
+                          <span className="text-[11px] font-semibold text-slate-700">{o.city}</span>
                         </div>
-                        <span className="text-[9px] text-slate-400 truncate max-w-[150px]">{o.address}</span>
+                        <span className="text-[10px] text-slate-400 truncate max-w-[180px]">{o.address}</span>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <div className="flex items-center justify-center gap-3">
-                         <Switch checked={o.isActive} onCheckedChange={() => toggleStatus(o)} className="scale-75" />
-                         <Badge variant="outline" className={cn("text-[9px] font-black h-5 border-none lowercase", o.isActive ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600")}>{o.isActive ? 'activo' : 'inactivo'}</Badge>
+                    <TableCell className="py-4 text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <Switch 
+                          checked={o.isActive} 
+                          onCheckedChange={() => toggleStatus(o)} 
+                        />
+                        <Badge className={cn("text-[9px] font-bold px-2 py-0.5 rounded-full border", 
+                          o.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-red-50 text-red-700 border-red-100"
+                        )}>
+                          {o.isActive ? 'Activo' : 'Inactivo'}
+                        </Badge>
                       </div>
                     </TableCell>
-                    <TableCell className="text-right pr-8">
-                      <Button variant="ghost" size="icon" className="h-9 w-9 text-primary opacity-0 group-hover:opacity-100 transition-opacity rounded-xl hover:bg-primary/10" onClick={() => { setEditingOwner(o); setIsDialogOpen(true); }}>
-                        <Pencil className="size-4" />
+                    <TableCell className="pr-6 py-4 text-right">
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-8 w-8 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10 transition-all duration-200" 
+                        onClick={() => { setEditingOwner(o); setIsDialogOpen(true); }}
+                      >
+                        <Pencil className="size-3.5" />
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -272,7 +376,8 @@ const OwnersPanel = () => {
         </CardContent>
       </Card>
 
-      <Card className="border border-muted/20 shadow-sm bg-white rounded-2xl overflow-hidden mt-4">
+      {/* Paginación */}
+      <Card className="border border-slate-100 shadow-sm bg-white rounded-xl overflow-hidden">
         <CardContent className="p-0">
           <DataTablePagination 
             totalRows={filtered.length} 
@@ -285,20 +390,25 @@ const OwnersPanel = () => {
         </CardContent>
       </Card>
 
+      {/* Modal - consistente con el resto del sistema */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-[850px] rounded-[2.5rem] p-0 overflow-hidden bg-white border-none shadow-3xl">
-          <DialogHeader className="p-8 pb-0">
-            <div className="flex items-center gap-4">
-              <div className="size-14 rounded-[1.5rem] bg-primary/10 flex items-center justify-center text-primary shadow-sm">
-                <Briefcase className="size-8" />
+        <DialogContent className="max-w-5xl rounded-2xl p-0 overflow-hidden bg-white shadow-xl border border-slate-100">
+          <DialogHeader className="p-6 pb-2">
+            <div className="flex items-center gap-3">
+              <div className="size-11 rounded-xl bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center text-primary">
+                <Briefcase className="size-5" />
               </div>
-              <div className="space-y-1">
-                <DialogTitle className="text-3xl font-black tracking-tighter text-slate-800">{editingOwner?.id ? 'Editar' : 'Añadir'} Propietario</DialogTitle>
-                <DialogDescription className="text-[10px] font-black text-muted-foreground tracking-widest uppercase">Gestión de identidades corporativas operativas.</DialogDescription>
+              <div>
+                <DialogTitle className="text-xl font-bold tracking-tight text-slate-800">
+                  {editingOwner?.id ? 'Editar' : 'Nuevo'} Propietario
+                </DialogTitle>
+                <DialogDescription className="text-xs text-slate-500">
+                  Gestión de identidades corporativas operativas
+                </DialogDescription>
               </div>
             </div>
           </DialogHeader>
-          <div className="px-8 pb-8 pt-6">
+          <div className="px-6 pb-6">
             <OwnerForm owner={editingOwner} onSave={handleSave} onCancel={() => setIsDialogOpen(false)} />
           </div>
         </DialogContent>

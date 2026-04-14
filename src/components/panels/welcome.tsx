@@ -3,10 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import { AppLogo } from '@/components/icons';
 import { Card, CardContent } from '@/components/ui/card';
-import { Package, Users2, ShieldCheck, ClipboardCheck, ArrowRight, LayoutDashboard, Truck } from 'lucide-react';
+import { Package, Users2, ShieldCheck, ClipboardCheck, ArrowRight, LayoutDashboard, Truck, Home } from 'lucide-react';
 import { useAuth } from '@/context/auth-context';
-import type { AppRole } from '@/lib/types';
-import { mockRoles } from '@/lib/data';
+import { cn } from '@/lib/utils';
+import { useFilteredAppData } from '../../hooks/use-filtered-app-data';
 
 interface WelcomePanelProps {
   onViewChange: (view: any) => void;
@@ -14,12 +14,12 @@ interface WelcomePanelProps {
 
 const WelcomePanel: React.FC<WelcomePanelProps> = ({ onViewChange }) => {
   const { currentUser } = useAuth();
+  const appData = useFilteredAppData(currentUser);
   const [allowedModules, setAllowedModules] = useState<string[]>([]);
 
   useEffect(() => {
     if (currentUser) {
-      const savedRoles = localStorage.getItem('appRoles');
-      const allRoles: AppRole[] = savedRoles ? JSON.parse(savedRoles) : mockRoles;
+      const allRoles = appData.roles;
       const currentRole = allRoles.find(r => r.id === currentUser.role);
       
       if (currentRole) {
@@ -29,66 +29,77 @@ const WelcomePanel: React.FC<WelcomePanelProps> = ({ onViewChange }) => {
         setAllowedModules(allowed);
       }
     }
-  }, [currentUser]);
+  }, [appData.roles, currentUser]);
 
   const quickActions = [
-    { id: 'dashboard', title: 'Dashboard', icon: <LayoutDashboard className="size-5" />, view: 'dashboard', color: 'from-primary to-primary/80' },
-    { id: 'orders', title: 'Certificaciones', icon: <Package className="size-5" />, view: 'orders', color: 'from-blue-500 to-blue-600' },
-    { id: 'tasks', title: 'Mis Tareas', icon: <ClipboardCheck className="size-5" />, view: 'my-tasks', color: 'from-emerald-500 to-emerald-600' },
-    { id: 'referrals', title: 'Remisiones', icon: <Truck className="size-5" />, view: 'referrals', color: 'from-orange-500 to-orange-600' },
-    { id: 'directory', title: 'Directorio', icon: <Users2 className="size-5" />, view: 'directory', color: 'from-purple-500 to-purple-600' },
-    { id: 'users', title: 'Seguridad', icon: <ShieldCheck className="size-5" />, view: 'users', color: 'from-slate-600 to-slate-700' },
+    { id: 'dashboard', title: 'Dashboard', icon: <LayoutDashboard className="size-4" />, view: 'dashboard', color: 'from-[#1d57b7] to-[#3b82f6]', description: 'Resumen operativo' },
+    { id: 'orders', title: 'Certificaciones', icon: <Package className="size-4" />, view: 'orders', color: 'from-blue-600 to-blue-500', description: 'Pedidos maestro' },
+    { id: 'tasks', title: 'Mis Tareas', icon: <ClipboardCheck className="size-4" />, view: 'my-tasks', color: 'from-emerald-600 to-emerald-500', description: 'Asignaciones pendientes' },
+    { id: 'referrals', title: 'Remisiones', icon: <Truck className="size-4" />, view: 'referrals', color: 'from-orange-500 to-amber-500', description: 'Despachos listos' },
+    { id: 'directory', title: 'Directorio', icon: <Users2 className="size-4" />, view: 'directory', color: 'from-purple-600 to-purple-500', description: 'Clientes y tiendas' },
+    { id: 'users', title: 'Seguridad', icon: <ShieldCheck className="size-4" />, view: 'users', color: 'from-slate-600 to-slate-500', description: 'Usuarios y roles' },
   ];
 
   const visibleActions = quickActions.filter(a => allowedModules.includes(a.id));
 
+  // Obtener iniciales o nombre de bienvenida
+  const firstName = currentUser?.name?.split(' ')[0] || 'Usuario';
+
   return (
-    <div className="flex flex-col items-center justify-center min-h-[70vh] space-y-10 animate-in fade-in zoom-in duration-500">
-      {/* Hero Section */}
-      <div className="text-center space-y-3">
-        <div className="mx-auto size-20 bg-primary/5 rounded-2xl flex items-center justify-center text-primary mb-5">
+    <div className="flex flex-col items-center justify-center min-h-[70vh] space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      
+      {/* Hero Section - consistente con el estilo del sistema */}
+      <div className="text-center space-y-4">
+        <div className="mx-auto size-20 bg-gradient-to-br from-primary/10 to-primary/5 rounded-2xl flex items-center justify-center text-primary shadow-sm">
           <AppLogo className="size-10" />
         </div>
-        <h1 className="text-3xl font-semibold tracking-tight text-gray-900">
-          ¡Bienvenido, <span className="text-primary font-bold">{currentUser?.name.split(' ')[0]}</span>!
-        </h1>
-        <p className="text-sm text-gray-500 max-w-lg mx-auto leading-relaxed">
-          Has ingresado al ecosistema de certificación logística. Selecciona un módulo para comenzar.
-        </p>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-800">
+            ¡Bienvenido, <span className="text-primary">{firstName}</span>!
+          </h1>
+          <p className="text-sm text-slate-500 max-w-lg mx-auto leading-relaxed mt-2">
+            Has ingresado al ecosistema de certificación logística. Selecciona un módulo para comenzar.
+          </p>
+        </div>
       </div>
 
-      {/* Quick Actions Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 w-full max-w-[90rem]">
+      {/* Quick Actions Grid - estilo consistente con TasksPanel */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-5 w-full max-w-[90rem]">
         {visibleActions.length > 0 ? (
           visibleActions.map((action) => (
             <Card 
               key={action.view} 
-              className="group border border-gray-100 bg-white shadow-sm hover:shadow-lg hover:border-gray-200 transition-all duration-300 cursor-pointer rounded-xl overflow-hidden"
+              className="group border border-slate-100 bg-white shadow-sm hover:shadow-md hover:border-slate-200 transition-all duration-200 cursor-pointer rounded-xl overflow-hidden"
               onClick={() => onViewChange(action.view)}
             >
               <CardContent className="p-5 flex flex-col items-center text-center space-y-3">
-                <div className={`w-12 h-12 bg-gradient-to-br ${action.color} text-white rounded-xl flex items-center justify-center shadow-sm group-hover:scale-110 group-hover:shadow-md transition-all duration-300`}>
+                <div className={cn(
+                  "w-12 h-12 bg-gradient-to-br rounded-xl flex items-center justify-center shadow-sm group-hover:scale-105 group-hover:shadow-md transition-all duration-200 text-white",
+                  action.color
+                )}>
                   {action.icon}
                 </div>
-                <div className="space-y-1">
-                  <h3 className="font-medium text-sm text-gray-800 tracking-tight">{action.title}</h3>
-                  <p className="text-[9px] font-medium text-gray-400 uppercase tracking-wide">Acceso Directo</p>
+                <div className="space-y-0.5">
+                  <h3 className="font-bold text-sm text-slate-800 tracking-tight">{action.title}</h3>
+                  <p className="text-[9px] font-medium text-slate-400 uppercase tracking-wider">{action.description}</p>
                 </div>
-                <ArrowRight className="size-3.5 text-gray-300 group-hover:text-primary group-hover:translate-x-0.5 transition-all" />
+                <ArrowRight className="size-3.5 text-slate-300 group-hover:text-primary group-hover:translate-x-0.5 transition-all duration-200" />
               </CardContent>
             </Card>
           ))
         ) : (
-          <div className="col-span-full py-12 text-center">
-            <p className="text-sm text-gray-400 font-medium">No tienes módulos habilitados. Contacta al administrador para asignar permisos a tu rol.</p>
+          <div className="col-span-full py-16 text-center bg-slate-50 rounded-2xl border border-slate-100">
+            <ShieldCheck className="size-12 mx-auto text-slate-300 mb-3" />
+            <p className="text-sm font-medium text-slate-400">No tienes módulos habilitados</p>
+            <p className="text-xs text-slate-400 mt-1">Contacta al administrador para asignar permisos a tu rol</p>
           </div>
         )}
       </div>
 
-      {/* Additional Info - Optional */}
+      {/* Footer Info - consistente */}
       {visibleActions.length > 0 && (
-        <div className="text-center">
-          <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+        <div className="text-center pt-4">
+          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
             {visibleActions.length} módulo{visibleActions.length !== 1 ? 's' : ''} disponible{visibleActions.length !== 1 ? 's' : ''}
           </p>
         </div>

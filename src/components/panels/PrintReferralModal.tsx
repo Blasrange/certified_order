@@ -15,6 +15,8 @@ import { mockStores } from "@/lib/data";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import { AppLogo } from "@/components/icons";
+import { useAuth } from "@/context/auth-context";
+import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
 
 interface PrintReferralModalProps {
   order: (OrderGroup & { processName?: string }) | null;
@@ -25,16 +27,17 @@ interface PrintReferralModalProps {
 
 const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, isOpen, onClose }) => {
   const printRef = useRef<HTMLDivElement>(null);
+  const { currentUser } = useAuth();
+  const appData = useFilteredAppData(currentUser);
   const [storeInfo, setStoreInfo] = useState<Store | null>(null);
 
   useEffect(() => {
     if (order && isOpen) {
-      const savedStores = localStorage.getItem('stores');
-      const allStores: Store[] = savedStores ? JSON.parse(savedStores) : mockStores;
+      const allStores: Store[] = appData.stores.length > 0 ? appData.stores : mockStores;
       const found = allStores.find(s => s.code === order.storeCode && s.customerNit === order.nit);
       setStoreInfo(found || null);
     }
-  }, [order, isOpen]);
+  }, [appData.stores, isOpen, order]);
 
   if (!order) return null;
 
@@ -220,93 +223,96 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-5xl w-full h-[90vh] flex flex-col p-0 overflow-hidden border-none shadow-3xl bg-white rounded-[2.5rem]">
-        <DialogHeader className="p-8 pb-4 bg-slate-50 border-b shrink-0">
+      <DialogContent className="max-w-5xl w-full h-[90vh] flex flex-col p-0 overflow-hidden border border-slate-100 shadow-2xl rounded-2xl bg-white">
+        {/* Header - consistente con otros modales */}
+        <DialogHeader className="p-6 pb-3 bg-white border-b border-slate-100 shrink-0">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="size-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shadow-sm">
-                <FileText className="size-6" />
-              </div>
-              <div className="space-y-0.5">
-                <DialogTitle className="text-2xl font-black tracking-tighter text-slate-800">Remisión de Despacho</DialogTitle>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Vista previa del documento oficial</p>
-              </div>
-            </div>
             <div className="flex items-center gap-3">
-              <Button 
-                onClick={handlePrint} 
-                className="rounded-full bg-primary text-white font-black text-xs px-8 h-11 shadow-xl shadow-primary/20 gap-2"
-              >
-                <Printer className="size-4" /> GENERAR DOCUMENTO
-              </Button>
+              <div className="size-11 rounded-xl bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center text-primary">
+                <FileText className="size-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-xl font-bold tracking-tight text-slate-800">Remisión de Despacho</DialogTitle>
+                <p className="text-xs text-slate-500">Vista previa del documento oficial</p>
+              </div>
             </div>
+            <Button 
+              onClick={handlePrint} 
+              className="rounded-xl bg-gradient-to-r from-[#1d57b7] to-[#1a4a9e] text-white font-semibold text-sm px-6 h-10 shadow-md shadow-primary/20 gap-2 hover:scale-[1.02] transition-all duration-200"
+            >
+              <Printer className="size-4" /> Generar documento
+            </Button>
           </div>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto p-12 bg-slate-100/50 flex justify-center">
+        {/* Contenido del documento */}
+        <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50 flex justify-center">
           <div 
             ref={printRef} 
-            className="bg-white shadow-2xl w-[800px] min-h-[1050px] p-16 flex flex-col font-sans text-slate-800"
+            className="bg-white shadow-xl rounded-xl w-[800px] min-h-[1050px] p-8 flex flex-col font-sans text-slate-800"
           >
-            <div className="flex justify-between items-start mb-10">
+            {/* Header del documento */}
+            <div className="flex justify-between items-start mb-8">
               <div>
-                <div className="flex items-center gap-3 mb-6">
-                  <AppLogo className="size-10 text-primary" />
-                  <span className="text-2xl font-black tracking-tighter uppercase text-slate-900">Certificador <span className="text-primary">Pro</span></span>
+                <div className="flex items-center gap-2 mb-4">
+                  <AppLogo className="size-8 text-primary" />
+                  <span className="text-xl font-bold tracking-tight uppercase text-slate-800">Certificador <span className="text-primary">Pro</span></span>
                 </div>
-                <div className="space-y-1">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Emisor Logístico</span>
-                  <div className="text-base font-black text-slate-800">{owner?.name || 'Logística Integral S.A.S'}</div>
-                  <div className="text-xs font-bold text-slate-500">NIT: {owner?.nit || '900.123.456-7'}</div>
-                  <div className="text-xs font-bold text-slate-500">{owner?.address || 'Calle 100 #15-30'}, {owner?.city || 'Bogotá'}</div>
+                <div className="space-y-0.5">
+                  <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Emisor Logístico</span>
+                  <div className="text-sm font-bold text-slate-800">{owner?.name || 'Logística Integral S.A.S'}</div>
+                  <div className="text-[11px] font-medium text-slate-500">NIT: {owner?.nit || '900.123.456-7'}</div>
+                  <div className="text-[11px] font-medium text-slate-500">{owner?.address || 'Calle 100 #15-30'}, {owner?.city || 'Bogotá'}</div>
                 </div>
               </div>
 
               <div className="text-right">
-                <div className="bg-slate-900 text-white px-8 py-5 rounded-[1.5rem] shadow-xl">
-                  <span className="text-[10px] font-black uppercase tracking-widest opacity-60 block mb-1">Remisión de Despacho</span>
-                  <div className="text-3xl font-black tracking-tighter"># {order.id}</div>
+                <div className="bg-slate-800 text-white px-6 py-4 rounded-xl shadow-md">
+                  <span className="text-[8px] font-bold uppercase tracking-wider opacity-70 block mb-0.5">Remisión de Despacho</span>
+                  <div className="text-2xl font-bold tracking-tight"># {order.id}</div>
                 </div>
-                <div className="mt-4">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Fecha de Emisión</span>
-                  <div className="text-sm font-black text-slate-800">{today}</div>
+                <div className="mt-3">
+                  <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider block">Fecha de Emisión</span>
+                  <div className="text-xs font-bold text-slate-700">{today}</div>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-6 mb-10">
-              <div className="bg-slate-50 border border-slate-100 p-6 rounded-[1.5rem] shadow-inner">
-                <span className="text-[10px] font-black text-primary uppercase tracking-widest block mb-3">Cliente Destinatario</span>
-                <div className="text-lg font-black text-slate-800 mb-1">{order.customerName}</div>
-                <div className="text-xs font-bold text-slate-500 uppercase">NIT: {order.nit}</div>
+            {/* Info de cliente y tienda */}
+            <div className="grid grid-cols-2 gap-5 mb-8">
+              <div className="bg-slate-50 border border-slate-100 p-5 rounded-xl">
+                <span className="text-[9px] font-bold text-primary uppercase tracking-wider block mb-2">Cliente Destinatario</span>
+                <div className="text-base font-bold text-slate-800 mb-0.5">{order.customerName}</div>
+                <div className="text-[11px] font-medium text-slate-500 uppercase">NIT: {order.nit}</div>
               </div>
-              <div className="bg-slate-50 border border-slate-100 p-6 rounded-[1.5rem] shadow-inner">
-                <span className="text-[10px] font-black text-primary uppercase tracking-widest block mb-3">Punto de Entrega</span>
-                <div className="text-lg font-black text-slate-800 mb-1">{order.storeName}</div>
-                <div className="text-xs font-bold text-slate-500">Código: {order.storeCode}</div>
-                <div className="text-xs font-bold text-slate-500">Dirección: {storeInfo?.address || 'Dirección no registrada'}</div>
+              <div className="bg-slate-50 border border-slate-100 p-5 rounded-xl">
+                <span className="text-[9px] font-bold text-primary uppercase tracking-wider block mb-2">Punto de Entrega</span>
+                <div className="text-base font-bold text-slate-800 mb-0.5">{order.storeName}</div>
+                <div className="text-[11px] font-medium text-slate-500">Código: {order.storeCode}</div>
+                <div className="text-[11px] font-medium text-slate-500">Dirección: {storeInfo?.address || 'Dirección no registrada'}</div>
               </div>
             </div>
 
+            {/* Tabla de items */}
             <div className="flex-1">
               <table className="w-full border-collapse">
                 <thead>
-                  <tr className="border-b-2 border-slate-900 h-12">
-                    <th className="text-left text-[11px] font-black uppercase tracking-tighter px-2">Sku / Código</th>
-                    <th className="text-left text-[11px] font-black uppercase tracking-tighter px-2">Descripción Técnica</th>
-                    <th className="text-left text-[11px] font-black uppercase tracking-tighter px-2">Lote</th>
-                    <th className="text-center text-[11px] font-black uppercase tracking-tighter px-2">Cant.</th>
-                    <th className="text-center text-[11px] font-black uppercase tracking-tighter px-2">Cajas</th>
+                  <tr className="border-b-2 border-slate-200 h-10">
+                    <th className="text-left text-[10px] font-bold uppercase tracking-wider px-2 text-slate-500">SKU / Código</th>
+                    <th className="text-left text-[10px] font-bold uppercase tracking-wider px-2 text-slate-500">Descripción Técnica</th>
+                    <th className="text-left text-[10px] font-bold uppercase tracking-wider px-2 text-slate-500">Lote</th>
+                    <th className="text-center text-[10px] font-bold uppercase tracking-wider px-2 text-slate-500">Cant.</th>
+                    <th className="text-center text-[10px] font-bold uppercase tracking-wider px-2 text-slate-500">Cajas</th>
                   </tr>
                 </thead>
                 <tbody>
                   {order.items.map((item, idx) => (
-                    <tr key={idx} className="border-b border-slate-100 h-14">
-                      <td className="px-2 text-sm font-black text-primary">{item.productCode}</td>
-                      <td className="px-2 text-xs font-bold text-slate-700 uppercase">{item.description}</td>
-                      <td className="px-2 text-[11px] font-mono font-bold text-slate-400">{item.batch || 'N/A'}</td>
-                      <td className="px-2 text-center text-sm font-black text-slate-800">{item.verifiedQuantity}</td>
-                      <td className="px-2 text-center text-sm font-black text-slate-800">
+                    <tr key={idx} className="border-b border-slate-50 h-12 hover:bg-slate-50/50">
+                      <td className="px-2 text-xs font-bold text-primary">{item.productCode}</td>
+                      <td className="px-2 text-[11px] font-medium text-slate-600 uppercase">{item.description}</td>
+                      <td className="px-2 text-[10px] font-mono font-semibold text-slate-400">{item.batch || 'N/A'}</td>
+                      <td className="px-2 text-center text-xs font-bold text-slate-700">{item.verifiedQuantity}</td>
+                      <td className="px-2 text-center text-xs font-bold text-slate-700">
                         {Math.floor(item.verifiedQuantity / (item.boxFactor || 1))}
                       </td>
                     </tr>
@@ -315,41 +321,49 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
               </table>
             </div>
 
-            <div className="flex justify-end mt-10">
-              <div className="w-64 space-y-3">
+            {/* Totales */}
+            <div className="flex justify-end mt-6">
+              <div className="w-60 space-y-2">
                 <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Unidades</span>
-                  <span className="text-lg font-black text-slate-800">{order.items.reduce((acc, i) => acc + (i.verifiedQuantity || 0), 0)}</span>
+                  <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Total Unidades</span>
+                  <span className="text-base font-bold text-slate-800">{order.items.reduce((acc, i) => acc + (i.verifiedQuantity || 0), 0)}</span>
                 </div>
-                <div className="flex justify-between items-center pt-3 border-t border-slate-100">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Bultos / Cajas</span>
-                  <span className="text-2xl font-black text-primary">{order.totalBoxes}</span>
+                <div className="flex justify-between items-center pt-2 border-t border-slate-100">
+                  <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Total Bultos / Cajas</span>
+                  <span className="text-xl font-bold text-primary">{order.totalBoxes}</span>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-16 mt-20">
+            {/* Firmas */}
+            <div className="grid grid-cols-2 gap-12 mt-12">
               <div className="text-center">
-                <div className="h-px bg-slate-300 w-full mb-3" />
-                <span className="text-[11px] font-black text-slate-800 uppercase block tracking-tighter">Firma Autorizada Despacho</span>
-                <span className="text-[10px] font-bold text-slate-400">Nombre y Cédula</span>
+                <div className="h-px bg-slate-200 w-full mb-2" />
+                <span className="text-[10px] font-bold text-slate-700 uppercase block tracking-tight">Firma Autorizada Despacho</span>
+                <span className="text-[9px] font-medium text-slate-400">Nombre y Cédula</span>
               </div>
               <div className="text-center">
-                <div className="h-px bg-slate-300 w-full mb-3" />
-                <span className="text-[11px] font-black text-slate-800 uppercase block tracking-tighter">Recibido por (Cliente)</span>
-                <span className="text-[10px] font-bold text-slate-400">Firma, Sello y Fecha</span>
+                <div className="h-px bg-slate-200 w-full mb-2" />
+                <span className="text-[10px] font-bold text-slate-700 uppercase block tracking-tight">Recibido por (Cliente)</span>
+                <span className="text-[9px] font-medium text-slate-400">Firma, Sello y Fecha</span>
               </div>
             </div>
 
-            <div className="mt-16 text-center text-[9px] font-black text-slate-200 uppercase tracking-[0.2em]">
+            {/* Footer */}
+            <div className="mt-10 text-center text-[8px] font-semibold text-slate-300 uppercase tracking-wider">
               Documento generado por Certificador - Certificación Trazable
             </div>
           </div>
         </div>
 
-        <DialogFooter className="p-8 bg-slate-50 border-t shrink-0">
-          <Button variant="ghost" onClick={onClose} className="rounded-full font-bold h-12 px-8 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 gap-2">
-            <X className="size-5" /> CERRAR VISTA
+        {/* Footer del modal */}
+        <DialogFooter className="p-5 bg-white border-t border-slate-100 shrink-0">
+          <Button 
+            variant="ghost" 
+            onClick={onClose} 
+            className="dialog-btn-secondary"
+          >
+            <X className="size-4" /> Cerrar
           </Button>
         </DialogFooter>
       </DialogContent>

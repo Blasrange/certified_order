@@ -12,6 +12,8 @@ import type {
 } from "@/lib/types";
 import type { AppBootstrapData } from "@/lib/app-data-types";
 
+const memoryCache = new Map<string, unknown>();
+
 const CACHE_KEYS = {
   owners: "owners",
   customers: "customers",
@@ -24,7 +26,7 @@ const CACHE_KEYS = {
 } as const;
 
 const writeCache = (key: string, value: unknown) => {
-  localStorage.setItem(key, JSON.stringify(value));
+  memoryCache.set(key, value);
 };
 
 const writeBootstrapCache = (data: AppBootstrapData) => {
@@ -38,11 +40,16 @@ const writeBootstrapCache = (data: AppBootstrapData) => {
   writeCache(CACHE_KEYS.groupedProcesses, data.groupedProcesses);
 };
 
-const postSnapshot = async (resource: string, data: unknown) => {
+const getAuditHeaders = () => {
+  return {};
+};
+
+const postSnapshot = async <T = unknown>(resource: string, data: unknown): Promise<T | null> => {
   const response = await fetch("/api/app-data/sync", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...getAuditHeaders(),
     },
     body: JSON.stringify({ resource, data }),
   });
@@ -51,6 +58,9 @@ const postSnapshot = async (resource: string, data: unknown) => {
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.error || `No se pudo sincronizar ${resource}.`);
   }
+
+  const payload = (await response.json().catch(() => null)) as { data?: T } | null;
+  return payload?.data ?? null;
 };
 
 export const hydrateLocalCacheFromDatabase = async () => {
@@ -105,5 +115,11 @@ export const persistUsers = async (users: User[]) => {
 
 export const persistGroupedProcesses = async (processes: GroupedOrder[]) => {
   writeCache(CACHE_KEYS.groupedProcesses, processes);
-  await postSnapshot("groupedProcesses", processes);
+  const syncedProcesses = await postSnapshot<GroupedOrder[]>("groupedProcesses", processes);
+  if (Array.isArray(syncedProcesses)) {
+    writeCache(CACHE_KEYS.groupedProcesses, syncedProcesses);
+    return syncedProcesses;
+  }
+
+  return processes;
 };

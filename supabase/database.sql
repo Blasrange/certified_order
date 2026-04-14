@@ -28,6 +28,167 @@ begin
 end;
 $$;
 
+create or replace function public.audit_table_change()
+returns trigger
+language plpgsql
+as $$
+declare
+  actor_auth_user_id uuid;
+  actor_app_user_id bigint;
+  actor_email text;
+  jwt_claims jsonb;
+  request_headers jsonb;
+  header_actor_auth_user_id uuid;
+  header_actor_app_user_id bigint;
+  header_actor_email text;
+  header_actor_user_code text;
+  header_actor_login_id text;
+  record_id text;
+begin
+  begin
+    actor_auth_user_id := auth.uid();
+  exception
+    when others then
+      actor_auth_user_id := null;
+  end;
+
+  begin
+    jwt_claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb;
+  exception
+    when others then
+      jwt_claims := null;
+  end;
+
+  begin
+    request_headers := nullif(current_setting('request.headers', true), '')::jsonb;
+  exception
+    when others then
+      request_headers := null;
+  end;
+
+  begin
+    header_actor_auth_user_id := nullif(request_headers ->> 'x-app-auth-user-id', '')::uuid;
+  exception
+    when others then
+      header_actor_auth_user_id := null;
+  end;
+
+  begin
+    header_actor_app_user_id := nullif(request_headers ->> 'x-app-user-id', '')::bigint;
+  exception
+    when others then
+      header_actor_app_user_id := null;
+  end;
+
+  header_actor_email := nullif(request_headers ->> 'x-app-user-email', '');
+  header_actor_user_code := nullif(request_headers ->> 'x-app-user-code', '');
+  header_actor_login_id := nullif(request_headers ->> 'x-app-user-login-id', '');
+
+  actor_email := coalesce(
+    header_actor_email,
+    jwt_claims ->> 'email',
+    nullif(current_setting('request.jwt.claim.email', true), ''),
+    session_user
+  );
+
+  actor_auth_user_id := coalesce(actor_auth_user_id, header_actor_auth_user_id);
+  actor_app_user_id := coalesce(actor_app_user_id, header_actor_app_user_id);
+
+  if actor_app_user_id is null and (
+    header_actor_user_code is not null
+    or header_actor_login_id is not null
+    or header_actor_email is not null
+  ) then
+    select
+      u.id,
+      u.auth_user_id,
+      coalesce(header_actor_email, u.email)
+    into
+      actor_app_user_id,
+      actor_auth_user_id,
+      actor_email
+    from public.app_users u
+    where (header_actor_user_code is not null and u.user_code = header_actor_user_code)
+       or (header_actor_login_id is not null and u.login_id = header_actor_login_id)
+       or (header_actor_email is not null and lower(u.email) = lower(header_actor_email))
+    order by u.id
+    limit 1;
+  end if;
+
+  if actor_auth_user_id is not null then
+    select u.id, coalesce(actor_email, u.email)
+    into actor_app_user_id, actor_email
+    from public.app_users u
+    where u.auth_user_id = actor_auth_user_id
+    limit 1;
+  end if;
+
+  if actor_auth_user_id is null and actor_app_user_id is not null then
+    select u.auth_user_id, coalesce(actor_email, u.email)
+    into actor_auth_user_id, actor_email
+    from public.app_users u
+    where u.id = actor_app_user_id
+    limit 1;
+  end if;
+
+  if tg_op = 'DELETE' then
+    record_id := coalesce(to_jsonb(old) ->> 'id', to_jsonb(old) ->> 'user_id');
+
+    insert into public.system_change_log (
+      schema_name,
+      table_name,
+      operation,
+      record_id,
+      changed_by_auth_user_id,
+      changed_by_app_user_id,
+      changed_by_email,
+      old_data,
+      new_data
+    )
+    values (
+      tg_table_schema,
+      tg_table_name,
+      lower(tg_op),
+      record_id,
+      actor_auth_user_id,
+      actor_app_user_id,
+      actor_email,
+      to_jsonb(old),
+      null
+    );
+
+    return old;
+  end if;
+
+  record_id := coalesce(to_jsonb(new) ->> 'id', to_jsonb(new) ->> 'user_id', to_jsonb(old) ->> 'id');
+
+  insert into public.system_change_log (
+    schema_name,
+    table_name,
+    operation,
+    record_id,
+    changed_by_auth_user_id,
+    changed_by_app_user_id,
+    changed_by_email,
+    old_data,
+    new_data
+  )
+  values (
+    tg_table_schema,
+    tg_table_name,
+    lower(tg_op),
+    record_id,
+    actor_auth_user_id,
+    actor_app_user_id,
+    actor_email,
+    case when tg_op = 'UPDATE' then to_jsonb(old) else null end,
+    to_jsonb(new)
+  );
+
+  return new;
+end;
+$$;
+
 --
 -- ESQUEMA OBJETIVO
 --
@@ -180,6 +341,29 @@ create table if not exists public.app_users (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.email_messages (
+  id bigint generated always as identity primary key,
+  message_code text unique,
+  created_by_user_id bigint references public.app_users(id) on delete set null,
+  recipient_email text not null,
+  recipient_name text,
+  cc_emails text[] not null default '{}',
+  bcc_emails text[] not null default '{}',
+  subject text not null,
+  body_text text,
+  body_html text,
+  status text not null default 'pending' check (status in ('pending', 'queued', 'sent', 'failed', 'cancelled')),
+  provider text,
+  provider_message_id text,
+  related_entity_type text,
+  related_entity_id bigint,
+  sent_at timestamptz,
+  error_message text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
 create table if not exists public.user_owner_access (
   user_id bigint not null references public.app_users(id) on delete cascade,
   owner_id bigint not null references public.owners(id) on delete cascade,
@@ -272,6 +456,20 @@ create table if not exists public.order_box_items (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.system_change_log (
+  id bigint generated always as identity primary key,
+  schema_name text not null,
+  table_name text not null,
+  operation text not null check (operation in ('insert', 'update', 'delete')),
+  record_id text,
+  changed_by_auth_user_id uuid references auth.users(id) on delete set null,
+  changed_by_app_user_id bigint references public.app_users(id) on delete set null,
+  changed_by_email text,
+  old_data jsonb,
+  new_data jsonb,
+  changed_at timestamptz not null default timezone('utc', now())
+);
+
 create index if not exists idx_owners_owner_code on public.owners(owner_code);
 create index if not exists idx_customers_owner_id on public.customers(owner_id);
 create index if not exists idx_stores_owner_id on public.stores(owner_id);
@@ -279,6 +477,9 @@ create index if not exists idx_stores_customer_id on public.stores(customer_id);
 create index if not exists idx_materials_owner_id on public.materials(owner_id);
 create index if not exists idx_materials_customer_id on public.materials(customer_id);
 create index if not exists idx_app_users_role_id on public.app_users(role_id);
+create index if not exists idx_email_messages_created_by_user_id on public.email_messages(created_by_user_id);
+create index if not exists idx_email_messages_recipient_email on public.email_messages(recipient_email);
+create index if not exists idx_email_messages_status on public.email_messages(status);
 create index if not exists idx_user_owner_access_owner_id on public.user_owner_access(owner_id);
 create index if not exists idx_certification_processes_owner_id on public.certification_processes(owner_id);
 create index if not exists idx_process_orders_process_id on public.process_orders(process_id);
@@ -287,6 +488,9 @@ create index if not exists idx_order_assignments_user_id on public.order_assignm
 create index if not exists idx_order_items_order_id on public.order_items(order_id);
 create index if not exists idx_order_boxes_order_id on public.order_boxes(order_id);
 create index if not exists idx_order_box_items_order_box_id on public.order_box_items(order_box_id);
+create index if not exists idx_system_change_log_table_name on public.system_change_log(table_name);
+create index if not exists idx_system_change_log_changed_at on public.system_change_log(changed_at desc);
+create index if not exists idx_system_change_log_changed_by_app_user_id on public.system_change_log(changed_by_app_user_id);
 
 create or replace view public.dispatch_ready_orders as
 select
@@ -340,6 +544,9 @@ create trigger trg_mapping_profiles_updated_at before update on public.mapping_p
 drop trigger if exists trg_app_users_updated_at on public.app_users;
 create trigger trg_app_users_updated_at before update on public.app_users for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_email_messages_updated_at on public.email_messages;
+create trigger trg_email_messages_updated_at before update on public.email_messages for each row execute function public.set_updated_at();
+
 drop trigger if exists trg_certification_processes_updated_at on public.certification_processes;
 create trigger trg_certification_processes_updated_at before update on public.certification_processes for each row execute function public.set_updated_at();
 
@@ -354,6 +561,57 @@ create trigger trg_order_boxes_updated_at before update on public.order_boxes fo
 
 drop trigger if exists trg_order_box_items_updated_at on public.order_box_items;
 create trigger trg_order_box_items_updated_at before update on public.order_box_items for each row execute function public.set_updated_at();
+
+drop trigger if exists trg_app_roles_audit on public.app_roles;
+create trigger trg_app_roles_audit after insert or update or delete on public.app_roles for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_role_module_permissions_audit on public.role_module_permissions;
+create trigger trg_role_module_permissions_audit after insert or update or delete on public.role_module_permissions for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_owners_audit on public.owners;
+create trigger trg_owners_audit after insert or update or delete on public.owners for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_customers_audit on public.customers;
+create trigger trg_customers_audit after insert or update or delete on public.customers for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_stores_audit on public.stores;
+create trigger trg_stores_audit after insert or update or delete on public.stores for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_materials_audit on public.materials;
+create trigger trg_materials_audit after insert or update or delete on public.materials for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_material_uoms_audit on public.material_uoms;
+create trigger trg_material_uoms_audit after insert or update or delete on public.material_uoms for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_mapping_profiles_audit on public.mapping_profiles;
+create trigger trg_mapping_profiles_audit after insert or update or delete on public.mapping_profiles for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_app_users_audit on public.app_users;
+create trigger trg_app_users_audit after insert or update or delete on public.app_users for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_email_messages_audit on public.email_messages;
+create trigger trg_email_messages_audit after insert or update or delete on public.email_messages for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_user_owner_access_audit on public.user_owner_access;
+create trigger trg_user_owner_access_audit after insert or update or delete on public.user_owner_access for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_certification_processes_audit on public.certification_processes;
+create trigger trg_certification_processes_audit after insert or update or delete on public.certification_processes for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_process_orders_audit on public.process_orders;
+create trigger trg_process_orders_audit after insert or update or delete on public.process_orders for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_order_assignments_audit on public.order_assignments;
+create trigger trg_order_assignments_audit after insert or update or delete on public.order_assignments for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_order_items_audit on public.order_items;
+create trigger trg_order_items_audit after insert or update or delete on public.order_items for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_order_boxes_audit on public.order_boxes;
+create trigger trg_order_boxes_audit after insert or update or delete on public.order_boxes for each row execute function public.audit_table_change();
+
+drop trigger if exists trg_order_box_items_audit on public.order_box_items;
+create trigger trg_order_box_items_audit after insert or update or delete on public.order_box_items for each row execute function public.audit_table_change();
 
 insert into public.app_roles (role_code, name, description, is_active)
 values

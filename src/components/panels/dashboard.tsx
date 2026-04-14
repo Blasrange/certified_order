@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useMemo } from "react";
 import {
   Card,
   CardContent,
@@ -11,18 +11,20 @@ import {
 import { 
   Package, 
   CheckCircle2, 
-  Loader2, 
   AlertCircle, 
   TrendingUp, 
-  ArrowUpRight, 
-  ArrowDownRight,
   Activity,
   Truck,
   ClipboardCheck,
   Layers,
-  ArrowRight,
   History,
   LayoutDashboard,
+  Boxes,
+  Users2,
+  Database,
+  CircleAlert,
+  CheckCheck,
+  CalendarClock,
 } from "lucide-react";
 import { 
   Area, 
@@ -35,322 +37,467 @@ import {
 } from "recharts";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import type { GroupedOrder } from "@/lib/types";
+import { useAuth } from "@/context/auth-context";
+import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
+import type { Customer, GroupedOrder, MappingProfile, Material, OrderGroup, Owner, Store, User } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
+import { es } from "date-fns/locale";
 
-const chartData = [
-  { name: "Lun", value: 40, units: 450 },
-  { name: "Mar", value: 30, units: 380 },
-  { name: "Mie", value: 65, units: 820 },
-  { name: "Jue", value: 45, units: 510 },
-  { name: "Vie", value: 90, units: 1100 },
-  { name: "Sab", value: 55, units: 640 },
-  { name: "Dom", value: 80, units: 950 },
-];
+type DashboardSnapshot = {
+  processes: GroupedOrder[];
+  orders: OrderGroup[];
+  owners: Owner[];
+  customers: Customer[];
+  stores: Store[];
+  materials: Material[];
+  users: User[];
+  mappingProfiles: MappingProfile[];
+};
 
 const StatCard = ({ 
   title, 
   value, 
   icon, 
   description, 
-  trend, 
-  trendType = 'up'
+  highlight,
 }: { 
   title: string, 
   value: string, 
   icon: React.ReactNode, 
   description: string, 
-  trend?: string,
-  trendType?: 'up' | 'down'
+  highlight?: string,
 }) => (
-    <Card className="border-none shadow-sm bg-white rounded-2xl overflow-hidden">
-        <CardContent className="p-5 flex flex-col justify-between h-full">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{title}</span>
-              <div className="size-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400">
-                {icon}
-              </div>
-            </div>
-            <div className="space-y-1">
-              <div className="text-3xl font-black tracking-tight text-slate-800">{value}</div>
-              <div className="flex items-center gap-2">
-                {trend && (
-                  <span className={cn(
-                    "text-[10px] font-bold flex items-center",
-                    trendType === 'up' ? "text-emerald-600" : "text-rose-600"
-                  )}>
-                    {trendType === 'up' ? <ArrowUpRight className="h-3 w-3 mr-0.5"/> : <ArrowDownRight className="h-3 w-3 mr-0.5"/>}
-                    {trend}
-                  </span>
-                )}
-                <p className="text-[10px] font-medium text-slate-400 truncate">{description}</p>
-              </div>
-            </div>
-        </CardContent>
-    </Card>
+  <Card className="border border-slate-100 bg-white rounded-2xl overflow-hidden transition-all duration-200 hover:shadow-md hover:border-slate-200 group">
+    <CardContent className="p-5 flex flex-col justify-between h-full">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[11px] font-bold text-slate-500 tracking-wide">{title}</span>
+        <div className="size-9 rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center text-slate-400 transition-all duration-200 group-hover:scale-105 group-hover:text-primary">
+          {icon}
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <div className="text-3xl font-black tracking-tight text-slate-800">{value}</div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {highlight && (
+            <span className="text-[10px] font-bold flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary/5 text-primary">
+              {highlight}
+            </span>
+          )}
+          <p className="text-[11px] font-medium text-slate-400">{description}</p>
+        </div>
+      </div>
+    </CardContent>
+  </Card>
 );
 
+type ActivityItem = {
+  id: string;
+  type: "completed-order" | "created-process" | "completed-process";
+  title: string;
+  description: string;
+  timestamp: string;
+};
+
+const getActivityIcon = (type: ActivityItem["type"]) => {
+  switch (type) {
+    case "completed-order":
+      return <CheckCircle2 className="size-3.5 text-emerald-500" />;
+    case "completed-process":
+      return <CheckCheck className="size-3.5 text-primary" />;
+    default:
+      return <Layers className="size-3.5 text-slate-500" />;
+  }
+};
+
 const DashboardPanel = () => {
-  const [data, setData] = useState<{
-    processes: any[],
-    stats: {
-      pending: number,
-      inProgress: number,
-      completed: number,
-      totalOrders: number,
-      totalUnits: number,
-      totalBoxes: number,
-      efficiency: number
-    },
-    recentActivity: any[]
-  }>({
-    processes: [],
-    stats: { pending: 0, inProgress: 0, completed: 0, totalOrders: 0, totalUnits: 0, totalBoxes: 0, efficiency: 0 },
-    recentActivity: []
-  });
+  const { currentUser } = useAuth();
+  const appData = useFilteredAppData(currentUser);
+  const snapshot = useMemo<DashboardSnapshot>(() => ({
+    processes: appData.groupedProcesses,
+    orders: appData.groupedProcesses.flatMap((process) => process.orders),
+    owners: appData.owners,
+    customers: appData.customers,
+    stores: appData.stores,
+    materials: appData.materials,
+    users: appData.users,
+    mappingProfiles: appData.mappingProfiles,
+  }), [appData]);
 
-  useEffect(() => {
-    const loadDashboardData = () => {
-      const saved = localStorage.getItem('groupedProcesses');
-      if (saved) {
-        const processes: any[] = JSON.parse(saved);
-        const allOrders = processes.flatMap(p => p.orders);
-        
-        const pending = allOrders.filter(o => !o.isFinalized && o.status === 'pending').length;
-        const inProgress = allOrders.filter(o => !o.isFinalized && o.status === 'partial').length;
-        const completed = allOrders.filter(o => o.isFinalized).length;
-        
-        const activity = allOrders
-          .filter(o => o.isFinalized)
-          .sort((a, b) => new Date(b.finalizedAt || '').getTime() - new Date(a.finalizedAt || '').getTime())
-          .slice(0, 10)
-          .map(o => ({
-            id: o.id,
-            title: `Certificación Finalizada`,
-            description: `${o.customerName}`,
-            time: o.finalizedAt ? format(new Date(o.finalizedAt), 'HH:mm') : 'Hace poco',
-            icon: <CheckCircle2 className="size-3.5 text-emerald-500" />
-          }));
+  const computed = useMemo(() => {
+    const today = new Date();
+    const activeUsers = snapshot.users.filter((user) => user.isActive).length;
+    const activeMaterials = snapshot.materials.filter((material) => material.isActive).length;
+    const activeStores = snapshot.stores.filter((store) => store.isActive).length;
+    const activeCustomers = snapshot.customers.filter((customer) => customer.isActive).length;
+    const activeProcesses = snapshot.processes.filter((process) => process.status !== 'completed').length;
 
-        setData({
-          processes,
-          stats: {
-            pending,
-            inProgress,
-            completed,
-            totalOrders: allOrders.length,
-            totalUnits: allOrders.reduce((acc, o) => acc + o.totalQuantity, 0),
-            totalBoxes: allOrders.reduce((acc, o) => acc + (o.totalBoxes || 0), 0),
-            efficiency: allOrders.length > 0 ? (completed / allOrders.length) * 100 : 0
-          },
-          recentActivity: activity
-        });
+    const pendingOrders = snapshot.orders.filter((order) => !order.isFinalized && order.status === 'pending');
+    const inProgressOrders = snapshot.orders.filter((order) => !order.isFinalized && order.status === 'partial');
+    const completedOrders = snapshot.orders.filter((order) => order.isFinalized || order.status === 'verified');
+    const cancelledOrders = snapshot.orders.filter((order) => order.status === 'cancelled');
+    const assignedOrders = snapshot.orders.filter((order) => Array.isArray(order.assignedTo) && order.assignedTo.length > 0 && !order.isFinalized && order.status !== 'cancelled');
+    const unassignedOrders = snapshot.orders.filter((order) => (!Array.isArray(order.assignedTo) || order.assignedTo.length === 0) && !order.isFinalized && order.status !== 'cancelled');
+    const certifiedUnits = snapshot.orders.reduce((acc, order) => acc + order.items.reduce((sum, item) => sum + (Number(item.verifiedQuantity) || 0), 0), 0);
+    const requestedUnits = snapshot.orders.reduce((acc, order) => acc + order.items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0), 0);
+    const boxesPlanned = snapshot.orders.reduce((acc, order) => acc + (order.totalBoxes || 0), 0);
+    const completionRate = snapshot.orders.length > 0 ? (completedOrders.length / snapshot.orders.length) * 100 : 0;
+    const executionRate = requestedUnits > 0 ? (certifiedUnits / requestedUnits) * 100 : 0;
+    const processesCompletedToday = snapshot.processes.filter((process) => process.status === 'completed' && process.orders.some((order) => order.finalizedAt && format(new Date(order.finalizedAt), 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd'))).length;
+    const completedToday = completedOrders.filter((order) => order.finalizedAt && format(new Date(order.finalizedAt), 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd'));
+    const myActiveTasks = currentUser
+      ? snapshot.orders.filter((order) => Array.isArray(order.assignedTo) && order.assignedTo.includes(currentUser.id) && !order.isFinalized && order.status !== 'cancelled').length
+      : 0;
+
+    const businessDates: Date[] = [];
+    let cursor = new Date(today);
+
+    while (businessDates.length < 5) {
+      const dayOfWeek = cursor.getDay();
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+        businessDates.unshift(new Date(cursor));
       }
+
+      cursor.setDate(cursor.getDate() - 1);
+    }
+
+    const weeklyChart = businessDates.map((baseDate) => {
+      const dateKey = format(baseDate, 'yyyy-MM-dd');
+      const dayOrders = completedOrders.filter((order) => order.finalizedAt && format(new Date(order.finalizedAt), 'yyyy-MM-dd') === dateKey);
+
+      return {
+        name: format(baseDate, 'EEE', { locale: es }),
+        value: dayOrders.length,
+        units: dayOrders.reduce((acc, order) => acc + order.items.reduce((sum, item) => sum + (Number(item.verifiedQuantity) || 0), 0), 0),
+      };
+    });
+
+    const recentActivity: ActivityItem[] = [
+      ...completedOrders
+        .filter((order) => order.finalizedAt)
+        .map((order) => ({
+          id: `order-${order.id}-${order.orderNumber}`,
+          type: 'completed-order' as const,
+          title: 'Pedido certificado',
+          description: `${order.customerName} · Orden ${order.orderNumber}`,
+          timestamp: order.finalizedAt as string,
+        })),
+      ...snapshot.processes.map((process) => ({
+        id: `process-${process.id}`,
+        type: process.status === 'completed' ? 'completed-process' as const : 'created-process' as const,
+        title: process.status === 'completed' ? 'Proceso completado' : 'Proceso creado',
+        description: `${process.name} · ${process.orders.length} pedidos`,
+        timestamp: process.status === 'completed'
+          ? process.orders
+              .map((order) => order.finalizedAt)
+              .filter(Boolean)
+              .sort()
+              .at(-1) || process.creationDate
+          : process.creationDate,
+      })),
+    ]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 8);
+
+    return {
+      activeUsers,
+      activeMaterials,
+      activeStores,
+      activeCustomers,
+      activeProcesses,
+      pendingOrders,
+      inProgressOrders,
+      completedOrders,
+      cancelledOrders,
+      assignedOrders,
+      unassignedOrders,
+      certifiedUnits,
+      requestedUnits,
+      boxesPlanned,
+      completionRate,
+      executionRate,
+      processesCompletedToday,
+      completedToday,
+      myActiveTasks,
+      weeklyChart,
+      recentActivity,
     };
-    
-    loadDashboardData();
-    window.addEventListener('storage', loadDashboardData);
-    return () => window.removeEventListener('storage', loadDashboardData);
-  }, []);
+  }, [currentUser, snapshot]);
+
+  const masterCoverage = useMemo(() => {
+    const buckets = [
+      snapshot.owners.length > 0,
+      snapshot.customers.length > 0,
+      snapshot.stores.length > 0,
+      snapshot.materials.length > 0,
+      snapshot.mappingProfiles.length > 0,
+      snapshot.users.length > 0,
+    ];
+
+    return (buckets.filter(Boolean).length / buckets.length) * 100;
+  }, [snapshot]);
 
   return (
-    <div className="flex flex-col gap-4 h-[calc(100vh-180px)] overflow-hidden animate-in fade-in duration-500">
-        
-        {/* Header Compacto */}
-        <div className="flex items-center justify-between bg-white px-6 py-4 rounded-2xl border border-slate-100 shadow-sm shrink-0">
-          <div className="flex items-center gap-4">
-            <div className="p-2 bg-primary/10 rounded-xl">
-              <LayoutDashboard className="size-5 text-primary" />
-            </div>
-            <div>
-              <h2 className="text-xl font-black tracking-tight text-slate-800">Control Operativo</h2>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                <Activity className="size-3" /> Estado de planta en tiempo real
-              </p>
+    <div className="flex flex-col gap-5 animate-in fade-in duration-500">
+      <div className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white px-5 py-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-4">
+          <div className="p-2.5 bg-gradient-to-br from-[#1d57b7]/10 to-[#3b82f6]/10 rounded-xl">
+            <LayoutDashboard className="size-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold tracking-tight text-slate-800">Resumen general</h2>
+            <p className="text-[11px] font-medium text-slate-400 flex items-center gap-2 mt-0.5">
+              <Activity className="size-3" /> Vista rápida del estado real de la operación y de los datos base del sistema
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-6">
+          <div className="flex flex-col sm:items-end">
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Pedidos completados</span>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-bold text-slate-800">{Math.round(computed.completionRate)}%</span>
+              <TrendingUp className="size-3.5 text-emerald-500" />
             </div>
           </div>
+          <div className="flex flex-col sm:items-end">
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Unidades verificadas</span>
+            <span className="text-2xl font-bold text-primary">{Math.round(computed.executionRate)}%</span>
+          </div>
+          <div className="flex flex-col sm:items-end">
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Última actualización</span>
+            <span className="text-sm font-bold text-slate-700">{format(new Date(), 'dd/MM/yyyy HH:mm')}</span>
+          </div>
+        </div>
+      </div>
 
-          <div className="flex items-center gap-8">
-            <div className="flex flex-col items-end pr-8 border-r border-slate-100">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">Efectividad Global</span>
-              <div className="flex items-baseline gap-1">
-                <span className="text-xl font-black text-slate-800">{Math.round(data.stats.efficiency)}%</span>
-                <TrendingUp className="size-3 text-emerald-500" />
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard 
+          title="Procesos abiertos"
+          value={computed.activeProcesses.toString()}
+          description={`${snapshot.processes.length} procesos registrados en total`}
+          highlight={`${computed.processesCompletedToday} finalizados hoy`}
+          icon={<Layers className="size-4" />}
+        />
+        <StatCard 
+          title="Pedidos listos"
+          value={computed.completedOrders.length.toString()}
+          description={`${computed.completedToday.length} finalizados hoy`}
+          highlight={`${snapshot.orders.length} pedidos cargados`}
+          icon={<CheckCircle2 className="size-4" />}
+        />
+        <StatCard 
+          title="Pedidos en proceso"
+          value={computed.inProgressOrders.length.toString()}
+          description={`${computed.assignedOrders.length} ya tienen responsable asignado`}
+          highlight={`${computed.myActiveTasks} están asignados a ti`}
+          icon={<ClipboardCheck className="size-4" />}
+        />
+        <StatCard 
+          title="Pedidos pendientes"
+          value={computed.pendingOrders.length.toString()}
+          description={`${computed.unassignedOrders.length} siguen sin responsable`}
+          highlight={`${computed.cancelledOrders.length} anulados`}
+          icon={<AlertCircle className="size-4" />}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.7fr_1fr]">
+        <div className="flex flex-col gap-5 min-w-0">
+          <Card className="border border-slate-100 bg-white rounded-2xl overflow-hidden transition-all duration-200 hover:shadow-md">
+            <CardHeader className="p-6 pb-3 shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <CardTitle className="text-lg font-bold tracking-tight text-slate-800">Estado de los pedidos</CardTitle>
+                  <CardDescription className="text-[11px] font-medium text-slate-400">Resumen del flujo actual de la operación</CardDescription>
+                </div>
+                <Badge variant="outline" className="rounded-full px-3 py-1 border-slate-200 bg-slate-50 text-[9px] font-semibold uppercase tracking-wider">Datos actuales</Badge>
               </div>
-            </div>
-            <div className="flex flex-col items-end">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">Turno Actual</span>
-              <span className="text-xl font-black text-primary">{(new Date().getHours() < 14) ? 'AM' : 'PM'}</span>
-            </div>
-          </div>
+            </CardHeader>
+            <CardContent className="p-6 pt-2 flex flex-col gap-6">
+              <div className="flex flex-col gap-5 py-2 lg:flex-row lg:items-center lg:justify-between relative">
+                <div className="absolute top-1/2 left-0 w-full h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent -translate-y-1/2 z-0" />
+                
+                {[
+                  { label: 'Pendientes', count: computed.pendingOrders.length, color: 'bg-slate-700', text: 'text-slate-700', icon: Package },
+                  { label: 'En proceso', count: computed.inProgressOrders.length, color: 'bg-primary', text: 'text-primary', icon: ClipboardCheck },
+                  { label: 'Certificados', count: computed.completedOrders.length, color: 'bg-emerald-500', text: 'text-emerald-500', icon: Truck }
+                ].map((step, i) => (
+                  <div key={i} className="relative z-10 flex flex-col items-center bg-white px-4">
+                    <div className={cn("size-14 rounded-2xl flex items-center justify-center text-white shadow-lg mb-3 transition-all duration-200 hover:scale-105 hover:shadow-xl", step.color)}>
+                      <step.icon className="size-6" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-slate-800 leading-none">{step.count}</p>
+                      <p className={cn("text-[9px] font-semibold uppercase tracking-wider mt-1.5", step.text)}>{step.label}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Unidades por procesar</p>
+                  <p className="mt-2 text-2xl font-bold tracking-tight text-slate-800">{computed.requestedUnits.toLocaleString('es-CO')}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Unidades verificadas</p>
+                  <p className="mt-2 text-2xl font-bold tracking-tight text-primary">{computed.certifiedUnits.toLocaleString('es-CO')}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Cajas estimadas</p>
+                  <p className="mt-2 text-2xl font-bold tracking-tight text-slate-800">{computed.boxesPlanned.toLocaleString('es-CO')}</p>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                    <TrendingUp className="size-3" /> Pedidos cerrados en los últimos 5 días hábiles
+                  </h4>
+                </div>
+                <div className="h-[220px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={computed.weeklyChart} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 600, fill: '#94a3b8' }} />
+                      <YAxis hide />
+                      <Tooltip 
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length) {
+                            return (
+                              <div className="bg-white px-4 py-3 border border-slate-100 rounded-xl shadow-xl">
+                                <p className="text-xl font-bold text-slate-800">{payload[0].value} pedidos cerrados</p>
+                                <p className="text-[10px] font-semibold text-primary uppercase tracking-wider mt-1">{payload[0].payload.units} unidades verificadas</p>
+                              </div>
+                            );
+                          }
+                          return null;
+                        }} 
+                      />
+                      <Area type="monotone" dataKey="value" stroke="hsl(var(--primary))" strokeWidth={3} fill="url(#colorValue)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
-        {/* Stats Row */}
-        <div className="grid grid-cols-4 gap-4 shrink-0">
-            <StatCard 
-                title="Procesos Maestros"
-                value={data.processes.length.toString()}
-                description="Contenedores hoy"
-                trend="+2"
-                icon={<Layers className="size-4" />}
-            />
-            <StatCard 
-                title="Certificados"
-                value={data.stats.completed.toString()}
-                description="Pedidos listos"
-                trend="Meta 85%"
-                icon={<CheckCircle2 className="size-4" />}
-            />
-            <StatCard 
-                title="En Validación"
-                value={data.stats.inProgress.toString()}
-                description="Carga en piso"
-                icon={<Loader2 className="size-4 animate-spin" />}
-            />
-            <StatCard 
-                title="Críticos"
-                value={data.stats.pending.toString()}
-                description="Sin iniciar"
-                trendType="down"
-                trend="Prioridad"
-                icon={<AlertCircle className="size-4" />}
-            />
-        </div>
+        <div className="flex flex-col gap-5 min-w-0">
+          <Card className="border border-slate-100 bg-white rounded-2xl overflow-hidden transition-all duration-200 hover:shadow-md">
+            <CardHeader className="p-6 pb-3 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl">
+                  <History className="size-4 text-slate-500" />
+                </div>
+                <CardTitle className="text-lg font-bold tracking-tight text-slate-800">Últimos movimientos</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="px-6 pb-6">
+              <div className="space-y-4 pt-2">
+                {computed.recentActivity.length > 0 ? (
+                  computed.recentActivity.map((act) => (
+                    <div key={act.id} className="flex items-start gap-3 group">
+                      <div className="size-8 rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 border border-slate-100 flex items-center justify-center shrink-0 transition-all duration-200 group-hover:scale-105">
+                        {getActivityIcon(act.type)}
+                      </div>
+                      <div className="flex-1 min-w-0 border-b border-slate-50 pb-3 group-last:border-none">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-semibold text-slate-700 truncate uppercase tracking-wide">{act.title}</p>
+                          <span className="text-[9px] font-medium text-slate-300">{format(new Date(act.timestamp), 'dd/MM HH:mm')}</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">{act.description}</p>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center opacity-30 py-12">
+                    <History className="size-10 mb-3 stroke-1" />
+                    <p className="text-[10px] font-semibold uppercase tracking-wider">Aún no hay movimientos registrados</p>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
-        {/* Main Section: Two Columns */}
-        <div className="flex-1 flex gap-4 min-h-0">
-          
-          {/* Left Column: Funnel & Chart */}
-          <div className="flex-[2] flex flex-col gap-4">
-            <Card className="border-none shadow-sm bg-white rounded-2xl flex-1 flex flex-col overflow-hidden">
-              <CardHeader className="p-6 pb-2 shrink-0">
+          <Card className="border border-slate-100 bg-white rounded-2xl overflow-hidden transition-all duration-200 hover:shadow-md">
+            <CardHeader className="p-6 pb-3">
+              <CardTitle className="text-lg font-bold tracking-tight text-slate-800">Estado general del sistema</CardTitle>
+            </CardHeader>
+            <CardContent className="p-6 pt-0">
+              <div className="flex flex-col gap-4">
                 <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <CardTitle className="text-lg font-black tracking-tight text-slate-800">Pipeline de Salidas</CardTitle>
-                    <CardDescription className="text-[9px] font-bold text-slate-400 uppercase">Flujo logístico secuencial</CardDescription>
-                  </div>
-                  <Badge variant="outline" className="rounded-full px-3 py-0.5 border-slate-100 bg-slate-50 text-[9px] font-black uppercase">Vivo</Badge>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Datos base disponibles</span>
+                  <Badge className="border-none bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary shadow-none rounded-full">
+                    {Math.round(masterCoverage)}%
+                  </Badge>
                 </div>
-              </CardHeader>
-              <CardContent className="p-6 pt-2 flex flex-col flex-1">
-                <div className="flex items-center justify-between gap-4 py-4 relative">
-                  <div className="absolute top-1/2 left-0 w-full h-px bg-slate-100 -translate-y-1/2 z-0" />
-                  
-                  {[
-                    { label: 'Pendientes', count: data.stats.pending, color: 'bg-slate-800', text: 'text-slate-800' },
-                    { label: 'En Proceso', count: data.stats.inProgress, color: 'bg-primary', text: 'text-primary' },
-                    { label: 'Certificados', count: data.stats.completed, color: 'bg-emerald-500', text: 'text-emerald-500' }
-                  ].map((step, i) => (
-                    <div key={i} className="relative z-10 flex flex-col items-center bg-white px-4">
-                      <div className={cn("size-12 rounded-xl flex items-center justify-center text-white shadow-lg mb-3", step.color)}>
-                        {i === 0 ? <Package className="size-5" /> : i === 1 ? <ClipboardCheck className="size-5" /> : <Truck className="size-5" />}
-                      </div>
-                      <div className="text-center">
-                        <p className="text-2xl font-black text-slate-800 leading-none">{step.count}</p>
-                        <p className={cn("text-[8px] font-black uppercase tracking-widest mt-1", step.text)}>{step.label}</p>
-                      </div>
+                <div className="flex items-baseline gap-3">
+                  <p className="text-4xl font-bold tracking-tight text-slate-800">{Math.round(masterCoverage)}%</p>
+                  <p className="text-[10px] font-semibold text-slate-500 flex items-center gap-0.5"><Database className="size-3" /> estructura mínima cargada</p>
+                </div>
+                <Progress value={masterCoverage} className="h-2 rounded-full bg-slate-100" />
+
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <Users2 className="size-4" />
+                      <span className="text-[10px] font-semibold uppercase tracking-wider">Usuarios activos</span>
                     </div>
-                  ))}
-                </div>
-
-                <div className="flex-1 min-h-0 mt-4 border-t border-slate-50 pt-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                      <TrendingUp className="size-3" /> Tendencia Semanal
-                    </h4>
+                    <p className="mt-2 text-2xl font-bold text-slate-800">{computed.activeUsers}</p>
                   </div>
-                  <div className="h-full max-h-[200px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="colorValue" x1="0" y2="1">
-                            <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.15}/>
-                            <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }} />
-                        <YAxis hide />
-                        <Tooltip 
-                          content={({ active, payload }) => {
-                            if (active && payload && payload.length) {
-                              return (
-                                <div className="bg-white p-3 border border-slate-100 rounded-xl shadow-xl">
-                                  <p className="text-lg font-black text-slate-800">{payload[0].value} Certificados</p>
-                                  <p className="text-[9px] font-bold text-primary uppercase">{payload[0].payload.units} Unidades</p>
-                                </div>
-                              );
-                            }
-                            return null;
-                          }} 
-                        />
-                        <Area type="monotone" dataKey="value" stroke="hsl(var(--primary))" strokeWidth={3} fill="url(#colorValue)" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Right Column: Activity & Meta */}
-          <div className="flex-1 flex flex-col gap-4">
-            <Card className="border-none shadow-sm bg-white rounded-2xl flex-1 flex flex-col overflow-hidden">
-              <CardHeader className="p-6 pb-2 shrink-0">
-                <div className="flex items-center gap-3">
-                  <div className="p-1.5 bg-slate-50 rounded-lg">
-                    <History className="size-4 text-slate-400" />
-                  </div>
-                  <CardTitle className="text-lg font-black tracking-tight text-slate-800">Log Maestro</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="px-6 flex-1 overflow-y-auto pb-6 custom-scrollbar">
-                <div className="space-y-4 pt-2">
-                  {data.recentActivity.length > 0 ? (
-                    data.recentActivity.map((act, i) => (
-                      <div key={i} className="flex items-start gap-3 group">
-                        <div className="size-7 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
-                          {act.icon}
-                        </div>
-                        <div className="flex-1 min-w-0 border-b border-slate-50 pb-3 group-last:border-none">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-[10px] font-black text-slate-700 truncate uppercase">{act.title}</p>
-                            <span className="text-[9px] font-bold text-slate-300">{act.time}</span>
-                          </div>
-                          <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">{act.description}</p>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center opacity-20 py-12">
-                      <History className="size-8 mb-2" />
-                      <p className="text-[10px] font-black uppercase">Sin actividad</p>
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <Boxes className="size-4" />
+                      <span className="text-[10px] font-semibold uppercase tracking-wider">Materiales activos</span>
                     </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-none shadow-sm bg-slate-900 rounded-2xl shrink-0 overflow-hidden text-white">
-              <CardContent className="p-6">
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">Avance Diario</span>
-                    <Badge className="bg-primary/20 text-primary border-none text-[9px] font-black shadow-none">META: 85%</Badge>
+                    <p className="mt-2 text-2xl font-bold text-slate-800">{computed.activeMaterials}</p>
                   </div>
-                  <div className="flex items-baseline gap-2">
-                    <p className="text-4xl font-black tracking-tight">72%</p>
-                    <p className="text-[10px] font-bold text-emerald-400 flex items-center"><TrendingUp className="size-3 mr-1" /> +5%</p>
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <Truck className="size-4" />
+                      <span className="text-[10px] font-semibold uppercase tracking-wider">Puntos activos</span>
+                    </div>
+                    <p className="mt-2 text-2xl font-bold text-slate-800">{computed.activeStores}</p>
                   </div>
-                  <Progress value={72} className="h-1.5 bg-white/5 rounded-full" />
-                  <p className="text-[9px] font-bold text-slate-500 uppercase mt-1">Faltan {data.stats.pending} pedidos por cerrar</p>
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <CalendarClock className="size-4" />
+                      <span className="text-[10px] font-semibold uppercase tracking-wider">Clientes activos</span>
+                    </div>
+                    <p className="mt-2 text-2xl font-bold text-slate-800">{computed.activeCustomers}</p>
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
-          </div>
 
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Atención prioritaria</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-800">
+                        {computed.unassignedOrders.length > 0
+                          ? `${computed.unassignedOrders.length} pedidos aún no tienen responsable asignado.`
+                          : 'Todos los pedidos activos tienen responsable asignado.'}
+                      </p>
+                    </div>
+                    {computed.unassignedOrders.length > 0 ? (
+                      <CircleAlert className="size-5 text-amber-500 shrink-0" />
+                    ) : (
+                      <CheckCheck className="size-5 text-emerald-500 shrink-0" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
+      </div>
     </div>
   );
 };

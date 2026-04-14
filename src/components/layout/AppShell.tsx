@@ -1,3 +1,5 @@
+// components/AppShell.tsx (solo diseño, misma funcionalidad)
+
 "use client";
 
 import * as React from "react";
@@ -33,8 +35,8 @@ import { AppLogo } from "@/components/icons";
 import { useAuth, ProtectedRoute } from "@/context/auth-context";
 import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import type { AppRole } from "@/lib/types";
-import { mockRoles } from "@/lib/data";
+import { SystemLoadingOverlay } from "@/components/ui/system-loading-overlay";
+import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
 
 type View = "home" | "dashboard" | "my-tasks" | "orders" | "mapping" | "directory" | "materials" | "users" | "referrals" | "owners" | "roles";
 
@@ -52,9 +54,12 @@ export default function AppShell({
   onOrdersViewChange 
 }: AppShellProps) {
   const { currentUser, logout } = useAuth();
+  const appData = useFilteredAppData(currentUser);
   const router = useRouter();
   const pathname = usePathname();
   const [userPermissions, setUserPermissions] = React.useState<string[]>([]);
+  const [isNavigating, setIsNavigating] = React.useState(false);
+  const [pendingView, setPendingView] = React.useState<View | null>(null);
   
   const activeView = React.useMemo(() => {
     const view = pathname.split("/")[1];
@@ -63,8 +68,7 @@ export default function AppShell({
 
   const loadPermissions = React.useCallback(() => {
     if (currentUser) {
-      const savedRoles = localStorage.getItem('appRoles');
-      const allRoles: AppRole[] = savedRoles ? JSON.parse(savedRoles) : mockRoles;
+      const allRoles = appData.roles;
       const currentRole = allRoles.find(r => r.id === currentUser.role);
       
       if (currentRole) {
@@ -74,20 +78,10 @@ export default function AppShell({
         setUserPermissions(allowedModules);
       }
     }
-  }, [currentUser]);
+  }, [appData.roles, currentUser]);
 
   React.useEffect(() => {
     loadPermissions();
-  }, [loadPermissions]);
-
-  React.useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'appRoles') {
-        loadPermissions();
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
   }, [loadPermissions]);
 
   React.useEffect(() => {
@@ -99,6 +93,11 @@ export default function AppShell({
     }
   }, [activeView, userPermissions, router]);
 
+  React.useEffect(() => {
+    setIsNavigating(false);
+    setPendingView(null);
+  }, [pathname]);
+
   if (!currentUser) return null;
 
   const hasAccess = (moduleId: string) => userPermissions.includes(moduleId);
@@ -109,7 +108,33 @@ export default function AppShell({
   };
 
   const handleViewChange = (view: View) => {
+    if (view === activeView) {
+      return;
+    }
+
+    setPendingView(view);
+    setIsNavigating(true);
     router.push(`/${view}`);
+  };
+
+  const getLoadingLabel = () => {
+    if (!pendingView) {
+      return 'Cargando módulo...';
+    }
+
+    switch (pendingView) {
+      case 'dashboard': return 'Abriendo dashboard...';
+      case 'my-tasks': return 'Abriendo mis tareas...';
+      case 'orders': return 'Abriendo certificaciones...';
+      case 'mapping': return 'Abriendo homologación...';
+      case 'directory': return 'Abriendo directorio...';
+      case 'materials': return 'Abriendo materiales...';
+      case 'users': return 'Abriendo usuarios...';
+      case 'referrals': return 'Abriendo remisiones...';
+      case 'owners': return 'Abriendo propietarios...';
+      case 'roles': return 'Abriendo roles...';
+      default: return 'Cargando módulo...';
+    }
   };
 
   const getPageTitle = () => {
@@ -153,17 +178,25 @@ export default function AppShell({
 
   return (
     <ProtectedRoute>
-      <div className="min-h-screen flex flex-col bg-gray-50/30">
-        {/* Top Navigation Bar - Modern & Clean */}
-        <header className="sticky top-0 z-50 w-full border-b border-gray-100 bg-white/95 backdrop-blur-sm">
-          <div className="w-full px-6 flex h-14 items-center justify-between">
-            <div className="flex items-center gap-6">
+      <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 via-white to-slate-50">
+        {isNavigating && (
+          <SystemLoadingOverlay
+            title={getLoadingLabel()}
+            description="Estamos preparando la vista seleccionada."
+          />
+        )}
+        {/* Top Navigation Bar - Mejorado con Inter */}
+        <header className="sticky top-0 z-50 w-full border-b border-slate-200/80 bg-white/98 backdrop-blur-md shadow-sm">
+          <div className="w-full px-6 flex h-16 items-center justify-between">
+            <div className="flex items-center gap-8">
               <div 
-                className="flex items-center gap-2 cursor-pointer group"
+                className="flex items-center gap-2.5 cursor-pointer group"
                 onClick={() => handleViewChange("home")}
               >
-                <AppLogo className="size-6 text-primary transition-transform group-hover:scale-105" />
-                <span className="text-sm font-medium tracking-tight text-gray-900">
+                <div className="flex size-8 items-center justify-center rounded-xl bg-gradient-to-br from-[#1d57b7] to-[#3b82f6] text-white shadow-md transition-all duration-300 group-hover:scale-105 group-hover:shadow-lg">
+                  <AppLogo className="size-5" />
+                </div>
+                <span className="text-base font-bold tracking-tight bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">
                   Certificador
                 </span>
               </div>
@@ -176,58 +209,60 @@ export default function AppShell({
                         variant="ghost" 
                         size="sm"
                         className={cn(
-                          "h-8 gap-1.5 text-[13px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-all",
-                          ["dashboard", "orders", "my-tasks", "referrals"].includes(activeView) && "text-gray-900 bg-gray-100"
+                          "h-9 gap-2 text-sm font-medium rounded-xl transition-all duration-200",
+                          ["dashboard", "orders", "my-tasks", "referrals"].includes(activeView) 
+                            ? "bg-slate-100 text-slate-900" 
+                            : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
                         )}
                       >
-                        <ClipboardCheck className="size-3.5" />
+                        <ClipboardCheck className="size-4" />
                         Operación
-                        <ChevronDown className="size-3 opacity-60" />
+                        <ChevronDown className="size-3.5 opacity-60" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-56 p-1 rounded-xl border border-gray-100 shadow-lg bg-white">
+                    <DropdownMenuContent align="start" className="w-56 p-1.5 rounded-xl border border-slate-200 shadow-xl bg-white">
                       {hasAccess('dashboard') && (
                         <DropdownMenuItem 
                           onClick={() => handleViewChange("dashboard")} 
                           className={cn(
-                            "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                            activeView === "dashboard" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                            "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                            activeView === "dashboard" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                           )}
                         >
-                          <LayoutDashboard className="size-3.5" /> Dashboard
+                          <LayoutDashboard className="size-4" /> Dashboard
                         </DropdownMenuItem>
                       )}
                       {hasAccess('orders') && (
                         <DropdownMenuItem 
                           onClick={() => handleViewChange("orders")} 
                           className={cn(
-                            "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                            activeView === "orders" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                            "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                            activeView === "orders" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                           )}
                         >
-                          <Package className="size-3.5" /> Pedidos Maestro
+                          <Package className="size-4" /> Pedidos Maestro
                         </DropdownMenuItem>
                       )}
                       {hasAccess('tasks') && (
                         <DropdownMenuItem 
                           onClick={() => handleViewChange("my-tasks")} 
                           className={cn(
-                            "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                            activeView === "my-tasks" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                            "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                            activeView === "my-tasks" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                           )}
                         >
-                          <ClipboardCheck className="size-3.5" /> Mis Tareas
+                          <ClipboardCheck className="size-4" /> Mis Tareas
                         </DropdownMenuItem>
                       )}
                       {hasAccess('referrals') && (
                         <DropdownMenuItem 
                           onClick={() => handleViewChange("referrals")} 
                           className={cn(
-                            "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                            activeView === "referrals" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                            "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                            activeView === "referrals" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                           )}
                         >
-                          <Truck className="size-3.5" /> Remisiones
+                          <Truck className="size-4" /> Remisiones
                         </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>
@@ -241,36 +276,38 @@ export default function AppShell({
                         variant="ghost" 
                         size="sm"
                         className={cn(
-                          "h-8 gap-1.5 text-[13px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-all",
-                          ["mapping", "directory", "materials", "users", "owners", "roles"].includes(activeView) && "text-gray-900 bg-gray-100"
+                          "h-9 gap-2 text-sm font-medium rounded-xl transition-all duration-200",
+                          ["mapping", "directory", "materials", "users", "owners", "roles"].includes(activeView) 
+                            ? "bg-slate-100 text-slate-900" 
+                            : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
                         )}
                       >
-                        <Settings className="size-3.5" />
+                        <Settings className="size-4" />
                         Administración
-                        <ChevronDown className="size-3 opacity-60" />
+                        <ChevronDown className="size-3.5 opacity-60" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-56 p-1 rounded-xl border border-gray-100 shadow-lg bg-white">
+                    <DropdownMenuContent align="start" className="w-56 p-1.5 rounded-xl border border-slate-200 shadow-xl bg-white">
                       {hasAccess('owners') && (
                         <DropdownMenuItem 
                           onClick={() => handleViewChange("owners")} 
                           className={cn(
-                            "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                            activeView === "owners" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                            "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                            activeView === "owners" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                           )}
                         >
-                          <Briefcase className="size-3.5" /> Propietarios
+                          <Briefcase className="size-4" /> Propietarios
                         </DropdownMenuItem>
                       )}
                       {hasAccess('mapping') && (
                         <DropdownMenuItem 
                           onClick={() => handleViewChange("mapping")} 
                           className={cn(
-                            "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                            activeView === "mapping" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                            "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                            activeView === "mapping" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                           )}
                         >
-                          <GitCompare className="size-3.5" /> Homologación
+                          <GitCompare className="size-4" /> Homologación
                         </DropdownMenuItem>
                       )}
                       {(hasAccess('owners') || hasAccess('mapping')) && <DropdownMenuSeparator className="my-1" />}
@@ -278,22 +315,22 @@ export default function AppShell({
                         <DropdownMenuItem 
                           onClick={() => handleViewChange("directory")} 
                           className={cn(
-                            "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                            activeView === "directory" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                            "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                            activeView === "directory" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                           )}
                         >
-                          <Contact2 className="size-3.5" /> Directorio
+                          <Contact2 className="size-4" /> Directorio
                         </DropdownMenuItem>
                       )}
                       {hasAccess('materials') && (
                         <DropdownMenuItem 
                           onClick={() => handleViewChange("materials")} 
                           className={cn(
-                            "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                            activeView === "materials" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                            "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                            activeView === "materials" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                           )}
                         >
-                          <FileText className="size-3.5" /> Catálogo Materiales
+                          <FileText className="size-4" /> Catálogo Materiales
                         </DropdownMenuItem>
                       )}
                       {(hasAccess('users') || hasAccess('roles')) && (
@@ -303,22 +340,22 @@ export default function AppShell({
                             <DropdownMenuItem 
                               onClick={() => handleViewChange("users")} 
                               className={cn(
-                                "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                                activeView === "users" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                                "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                                activeView === "users" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                               )}
                             >
-                              <Users2 className="size-3.5" /> Usuarios
+                              <Users2 className="size-4" /> Usuarios
                             </DropdownMenuItem>
                           )}
                           {hasAccess('roles') && (
                             <DropdownMenuItem 
                               onClick={() => handleViewChange("roles")} 
                               className={cn(
-                                "rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer",
-                                activeView === "roles" ? "text-gray-900 bg-gray-50" : "text-gray-600"
+                                "rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer transition-all duration-150",
+                                activeView === "roles" ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
                               )}
                             >
-                              <ShieldCheck className="size-3.5" /> Roles y Permisos
+                              <ShieldCheck className="size-4" /> Roles y Permisos
                             </DropdownMenuItem>
                           )}
                         </>
@@ -329,48 +366,42 @@ export default function AppShell({
               </nav>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4">
               <div className="hidden lg:flex flex-col items-end">
-                <span className="text-xs font-medium text-gray-700 leading-tight">{currentUser.name}</span>
-                <span className="text-[10px] text-gray-400 uppercase tracking-wide">{currentUser.role}</span>
+                <span className="text-sm font-semibold text-slate-700 leading-tight">{currentUser.name}</span>
+                <span className="text-xs text-slate-400">{currentUser.email}</span>
               </div>
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="relative h-8 w-8 rounded-full hover:bg-gray-100 transition-all p-0">
-                    <Avatar className="h-8 w-8">
+                  <Button variant="ghost" className="relative h-9 w-9 rounded-full hover:bg-slate-100 transition-all duration-200 p-0 focus:ring-2 focus:ring-[#1d57b7]/30">
+                    <Avatar className="h-9 w-9 ring-2 ring-white shadow-sm">
                       <AvatarImage src={currentUser.avatar} alt={currentUser.name} />
-                      <AvatarFallback className="bg-gray-100 text-gray-600 text-xs font-medium">{currentUser.name.charAt(0)}</AvatarFallback>
+                      <AvatarFallback className="bg-gradient-to-br from-[#1d57b7] to-[#3b82f6] text-white text-sm font-semibold">
+                        {currentUser.name.charAt(0)}
+                      </AvatarFallback>
                     </Avatar>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56 p-1 rounded-xl border border-gray-100 shadow-lg bg-white">
+                <DropdownMenuContent align="end" className="w-64 p-1.5 rounded-xl border border-slate-200 shadow-xl bg-white">
                   <div className="flex items-center gap-3 p-3 pb-2">
-                    <Avatar className="h-9 w-9">
+                    <Avatar className="h-10 w-10 ring-2 ring-[#1d57b7]/20">
                       <AvatarImage src={currentUser.avatar} />
-                      <AvatarFallback className="bg-gray-100 text-gray-600 text-xs">{currentUser.name[0]}</AvatarFallback>
+                      <AvatarFallback className="bg-gradient-to-br from-[#1d57b7] to-[#3b82f6] text-white text-sm font-semibold">
+                        {currentUser.name[0]}
+                      </AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col">
-                      <span className="text-xs font-medium text-gray-900 leading-tight">{currentUser.name}</span>
-                      <span className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[140px]">{currentUser.email}</span>
+                      <span className="text-sm font-semibold text-slate-900 leading-tight">{currentUser.name}</span>
+                      <span className="text-xs text-slate-400 mt-0.5 truncate max-w-[160px]">{currentUser.email}</span>
                     </div>
                   </div>
                   <DropdownMenuSeparator className="my-1" />
                   <DropdownMenuItem 
-                    onClick={() => handleViewChange("home")} 
-                    className="rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer text-gray-600"
-                  >
-                    <Eye className="size-3.5" /> Mi Perfil
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer text-gray-600">
-                    <Settings className="size-3.5" /> Configuración
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator className="my-1" />
-                  <DropdownMenuItem 
                     onClick={handleLogout} 
-                    className="rounded-lg h-9 gap-2.5 text-[13px] font-medium cursor-pointer text-red-600 focus:bg-red-50 focus:text-red-600"
+                    className="rounded-lg h-10 gap-3 text-sm font-medium cursor-pointer text-red-600 focus:bg-red-50 focus:text-red-600 transition-all duration-150"
                   >
-                    <LogOut className="size-3.5" /> Cerrar Sesión
+                    <LogOut className="size-4" /> Cerrar Sesión
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -378,42 +409,42 @@ export default function AppShell({
           </div>
         </header>
 
-        {/* Breadcrumbs Navigation - Minimal */}
-        <div className="bg-white px-6 py-2.5 border-b border-gray-100 flex items-center gap-2">
+        {/* Breadcrumbs Navigation - Mejorado */}
+        <div className="bg-white/80 backdrop-blur-sm px-6 py-3 border-b border-slate-200/80 flex items-center gap-2">
           <button 
             onClick={() => handleViewChange("home")}
-            className="p-0.5 hover:bg-gray-100 rounded-md transition-colors group"
+            className="p-1 hover:bg-slate-100 rounded-lg transition-all duration-200 group"
           >
             <HomeIcon className={cn(
-              "size-3.5 transition-colors", 
-              activeView === "home" ? "text-gray-700" : "text-gray-400 group-hover:text-gray-600"
+              "size-4 transition-all duration-200", 
+              activeView === "home" ? "text-slate-700" : "text-slate-400 group-hover:text-slate-600"
             )} />
           </button>
           {activeView !== "home" && (
             <>
-              <ChevronRight className="size-3 text-gray-300" />
-              <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
+              <ChevronRight className="size-3.5 text-slate-300" />
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
                 {getCategoryName()}
               </span>
               
               {activeView === "orders" && ordersSubView === "detail" ? (
                 <>
-                  <ChevronRight className="size-3 text-gray-300" />
+                  <ChevronRight className="size-3.5 text-slate-300" />
                   <span 
-                    className="text-[11px] font-medium text-gray-500 hover:text-gray-700 cursor-pointer transition-colors uppercase tracking-wide"
+                    className="text-xs font-medium text-slate-500 hover:text-slate-700 cursor-pointer transition-colors uppercase tracking-wide"
                     onClick={() => onOrdersViewChange?.('list')}
                   >
                     Certificaciones
                   </span>
-                  <ChevronRight className="size-3 text-gray-300" />
-                  <span className="text-[11px] font-medium text-gray-900 truncate max-w-[250px]">
+                  <ChevronRight className="size-3.5 text-slate-300" />
+                  <span className="text-xs font-semibold text-slate-800 truncate max-w-[300px]">
                     {selectedProcessName}
                   </span>
                 </>
               ) : (
                 <>
-                  <ChevronRight className="size-3 text-gray-300" />
-                  <span className="text-[11px] font-medium text-gray-900">
+                  <ChevronRight className="size-3.5 text-slate-300" />
+                  <span className="text-xs font-semibold text-slate-800">
                     {getPageTitle()}
                   </span>
                 </>
@@ -422,9 +453,9 @@ export default function AppShell({
           )}
         </div>
 
-        {/* Main Content Area */}
-        <main className="flex-1 w-full p-6">
-          <div className="w-full max-w-[1600px] mx-auto">
+        {/* Main Content Area - Mejorado con padding y max-width optimizado */}
+        <main className="flex-1 w-full p-4 sm:p-6 lg:p-8">
+          <div className="w-full">
             {children}
           </div>
         </main>

@@ -24,6 +24,9 @@ import {
   FileText,
   Package,
   Layers,
+  CheckCircle2,
+  Clock,
+  AlertCircle,
 } from "lucide-react";
 import type { OrderGroup } from "@/lib/types";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -39,7 +42,7 @@ interface OrderViewModalProps {
 
 /**
  * MODAL DE CONSULTA DE PEDIDO (INFORMATIVO)
- * Diseño unificado con el estándar de la plataforma (Tarjetas separadas).
+ * Diseño mejorado - consistente con los estilos del sistema
  */
 const OrderViewModal: React.FC<OrderViewModalProps> = ({ 
   orderGroup, 
@@ -60,128 +63,191 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
 
   const verifiedTotal = orderGroup.items.reduce((acc, i) => acc + (i.verifiedQuantity || 0), 0);
   const requestedTotal = orderGroup.items.reduce((acc, i) => acc + i.quantity, 0);
+  
+  const progressPercentage = requestedTotal > 0 ? (verifiedTotal / requestedTotal) * 100 : 0;
+
+  // Color de estado
+  const getStatusColor = () => {
+    if (orderGroup.isFinalized) return "bg-emerald-50 text-emerald-700 border-emerald-100";
+    if (orderGroup.status === 'partial') return "bg-amber-50 text-amber-700 border-amber-100";
+    return "bg-red-50 text-red-700 border-red-100";
+  };
+
+  const getStatusIcon = () => {
+    if (orderGroup.isFinalized) return <CheckCircle2 className="size-3.5" />;
+    if (orderGroup.status === 'partial') return <Clock className="size-3.5" />;
+    return <AlertCircle className="size-3.5" />;
+  };
+
+  const getStatusText = () => {
+    if (orderGroup.isFinalized) return "Finalizado";
+    if (orderGroup.status === 'partial') return "Parcial";
+    return "Pendiente";
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-[90vw] w-[1400px] h-[90vh] flex flex-col p-0 overflow-hidden border-none shadow-3xl bg-slate-50 rounded-[2.5rem]">
-        {/* Header con información de cliente y progreso */}
-        <DialogHeader className="p-8 pb-6 bg-white border-b shrink-0">
-          <div className="flex justify-between items-start gap-8">
-            <div className="space-y-4 flex-1">
-              <div className="flex items-center gap-4">
-                <div className="size-14 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shadow-sm">
-                  <FileText className="size-8" />
+      <DialogContent className="max-w-[90vw] w-[1100px] max-h-[85vh] flex flex-col p-0 overflow-hidden border border-slate-100 shadow-2xl rounded-2xl bg-white">
+        
+        {/* Header - consistente con OrdersPanel */}
+        <DialogHeader className="p-6 pb-4 bg-white border-b border-slate-100 shrink-0">
+          <div className="flex justify-between items-start gap-6">
+            <div className="space-y-3 flex-1">
+              <div className="flex items-center gap-3">
+                <div className="size-11 rounded-xl bg-gradient-to-br from-[#1d57b7]/10 to-[#3b82f6]/10 flex items-center justify-center text-primary">
+                  <FileText className="size-5" />
                 </div>
-                <div className="space-y-0.5">
-                  <DialogTitle className="text-3xl font-black tracking-tighter text-slate-800">
-                    Consulta de Pedido {orderGroup.id}
+                <div>
+                  <DialogTitle className="text-xl font-bold tracking-tight text-slate-800">
+                    Detalle del Pedido
                   </DialogTitle>
-                  <div className="flex items-center gap-3">
-                    <Badge variant="outline" className="text-[10px] font-black uppercase tracking-widest border-primary/20 bg-primary/5 text-primary px-3">Pedido #{orderGroup.orderNumber}</Badge>
-                    <Badge className={cn("text-[9px] font-black px-3 py-1 uppercase", 
-                      (orderGroup.status === 'pending' || orderGroup.status === 'cancelled') ? "bg-red-50 text-red-600" : 
-                      orderGroup.status === 'partial' ? "bg-amber-50 text-amber-600" : "bg-green-50 text-green-600")}>
-                      {orderGroup.isFinalized ? 'Finalizado' : (orderGroup.status === 'pending' ? 'Pendiente' : orderGroup.status)}
-                    </Badge>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs font-mono font-semibold text-slate-500">{orderGroup.id}</span>
+                    <span className="text-xs text-slate-300">•</span>
+                    <span className="text-xs font-mono text-slate-400">#{orderGroup.orderNumber}</span>
                   </div>
                 </div>
               </div>
               
-              <div className="flex items-center gap-10 pl-2">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-slate-100 rounded-xl text-slate-500"><Building2 className="size-5" /></div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Socio Comercial</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-slate-700">{orderGroup.customerName}</span>
-                      <Badge variant="outline" className="text-[9px] font-mono border-slate-200 text-slate-400 bg-slate-50">NIT: {orderGroup.nit}</Badge>
-                    </div>
+              {/* Info de cliente y tienda - estilo consistente */}
+              <div className="flex items-center gap-6 pl-1">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
+                    <Building2 className="size-3.5" />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Cliente</p>
+                    <p className="text-xs font-bold text-slate-700">{orderGroup.customerName}</p>
+                    <p className="text-[9px] font-mono text-slate-400">NIT: {orderGroup.nit}</p>
                   </div>
                 </div>
-                <div className="h-10 w-px bg-slate-200" />
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-slate-100 rounded-xl text-slate-500"><StoreIcon className="size-5" /></div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Punto de Entrega</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-slate-700">{orderGroup.storeName}</span>
-                      <Badge variant="outline" className="text-[9px] font-mono border-slate-200 text-slate-400 bg-slate-50">COD: {orderGroup.storeCode}</Badge>
-                    </div>
+                
+                <div className="w-px h-7 bg-slate-200" />
+                
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
+                    <StoreIcon className="size-3.5" />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Punto de venta</p>
+                    <p className="text-xs font-bold text-slate-700 truncate max-w-[200px]">{orderGroup.storeName}</p>
+                    <p className="text-[9px] font-mono text-slate-400">Cód: {orderGroup.storeCode}</p>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-4 bg-slate-50 p-5 rounded-[2rem] border border-slate-100 shadow-inner shrink-0">
-              <div className="flex flex-col items-center px-6 border-r border-slate-200">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Cajas</span>
-                <span className="text-2xl font-black text-primary">{orderGroup.totalBoxes}</span>
+            {/* Panel de estadísticas - estilo consistente con las cards */}
+            <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100 shrink-0">
+              <div className="text-center px-3">
+                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Cajas</p>
+                <p className="text-xl font-bold text-primary">{orderGroup.totalBoxes}</p>
               </div>
-              <div className="flex flex-col items-center px-6">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Unidades</span>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-2xl font-black text-slate-800">{verifiedTotal}</span>
-                  <span className="text-xs font-bold text-slate-300">/ {requestedTotal}</span>
+              <div className="w-px h-8 bg-slate-200" />
+              <div className="text-center px-3">
+                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Unidades</p>
+                <div className="flex items-baseline gap-0.5">
+                  <span className="text-xl font-bold text-emerald-600">{verifiedTotal}</span>
+                  <span className="text-xs font-semibold text-slate-300">/{requestedTotal}</span>
                 </div>
               </div>
+              <div className="w-px h-8 bg-slate-200" />
+              <div className="text-center px-3">
+                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Estado</p>
+                <Badge className={cn("text-[9px] font-bold px-2.5 py-0.5 rounded-full gap-1 border", getStatusColor())}>
+                  {getStatusIcon()}
+                  <span>{getStatusText()}</span>
+                </Badge>
+              </div>
+            </div>
+          </div>
+          
+          {/* Barra de progreso - consistente con la de OrdersPanel */}
+          <div className="mt-4">
+            <div className="flex justify-between items-center mb-1.5">
+              <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Progreso de certificación</span>
+              <span className="text-[11px] font-bold text-primary">{Math.round(progressPercentage)}%</span>
+            </div>
+            <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-[#1d57b7] to-[#3b82f6] rounded-full transition-all duration-500"
+                style={{ width: `${progressPercentage}%` }}
+              />
             </div>
           </div>
         </DialogHeader>
 
-        {/* Cuerpo del Modal con tarjetas separadas para Tabla y Paginación */}
-        <div className="flex-1 overflow-hidden flex flex-col p-8 gap-0">
-          <Card className="border border-muted/20 shadow-sm rounded-2xl overflow-hidden bg-white flex flex-col flex-1">
+        {/* Cuerpo del Modal - Tabla consistente con OrdersPanel */}
+        <div className="flex-1 overflow-hidden flex flex-col p-6 gap-4">
+          {/* Tabla de items */}
+          <Card className="border border-slate-100 shadow-sm rounded-xl overflow-hidden bg-white flex flex-col flex-1">
             <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
               <ScrollArea className="flex-1">
                 <Table>
-                  <TableHeader className="bg-muted/5 h-14 sticky top-0 z-10 backdrop-blur-sm">
-                    <TableRow>
-                      <TableHead className="pl-8 text-[11px] font-black text-slate-800 uppercase">Sku / Código</TableHead>
-                      <TableHead className="text-[11px] font-black text-slate-800 uppercase">Descripción Técnica</TableHead>
-                      <TableHead className="text-[11px] font-black text-slate-800 uppercase">Lote</TableHead>
-                      <TableHead className="text-center text-[11px] font-black text-slate-400 uppercase">Unid. Solicitadas</TableHead>
-                      <TableHead className="text-center text-[11px] font-black text-primary uppercase">Unid. Certificadas</TableHead>
-                      <TableHead className="text-center text-[11px] font-black text-slate-400 uppercase">Cajas Solicitadas</TableHead>
-                      <TableHead className="text-center text-[11px] font-black text-primary uppercase">Cajas Certificadas</TableHead>
-                      <TableHead className="pr-8 text-right text-[11px] font-black text-slate-800 uppercase">Estado</TableHead>
+                  <TableHeader className="bg-slate-50/80 sticky top-0 z-10">
+                    <TableRow className="border-b border-slate-100">
+                      <TableHead className="pl-5 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">SKU / Código</TableHead>
+                      <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Descripción</TableHead>
+                      <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Lote</TableHead>
+                      <TableHead className="py-3 text-center text-[10px] font-bold text-slate-500 uppercase tracking-wider">Unid. Solicitadas</TableHead>
+                      <TableHead className="py-3 text-center text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Unid. Certificadas</TableHead>
+                      <TableHead className="py-3 text-center text-[10px] font-bold text-slate-500 uppercase tracking-wider">Cajas Solicitadas</TableHead>
+                      <TableHead className="py-3 text-center text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Cajas Certificadas</TableHead>
+                      <TableHead className="pr-5 py-3 text-right text-[10px] font-bold text-slate-500 uppercase tracking-wider">Estado</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {paginatedItems.map((item, idx) => {
                       const factor = item.boxFactor || 1;
-                      // Cálculo de cajas solicitado con decimales como pidió el usuario (ej. 1.333)
                       const reqBoxesRaw = item.quantity / factor;
                       const reqBoxesDisplay = reqBoxesRaw % 1 === 0 ? reqBoxesRaw.toString() : reqBoxesRaw.toFixed(3);
-                      
-                      // Cálculo de cajas certificado con redondeo superior (ej. 1 full + saldo = 2 cajas)
                       const certBoxes = Math.ceil(item.verifiedQuantity / factor);
                       
+                      const getItemStatusColor = () => {
+                        if (item.status === 'verified') return "bg-emerald-50 text-emerald-700 border-emerald-100";
+                        if (item.status === 'partial') return "bg-amber-50 text-amber-700 border-amber-100";
+                        return "bg-red-50 text-red-700 border-red-100";
+                      };
+                      
+                      const getItemStatusText = () => {
+                        if (item.status === 'verified') return "Certificado";
+                        if (item.status === 'partial') return "Parcial";
+                        return "Pendiente";
+                      };
+                      
                       return (
-                        <TableRow key={idx} className="h-16 border-b transition-colors hover:bg-slate-50/50">
-                          <TableCell className="pl-8 font-mono font-bold text-[11px] text-primary">{item.productCode}</TableCell>
-                          <TableCell className="font-bold text-[11px] text-slate-600 truncate max-w-[250px] uppercase">{item.description}</TableCell>
-                          <TableCell className="font-mono text-[10px] font-bold text-slate-400 uppercase">{item.batch || 'N/A'}</TableCell>
-                          <TableCell className="text-center font-bold text-[12px] text-slate-400">{item.quantity}</TableCell>
-                          <TableCell className="text-center font-black text-[12px] text-slate-800">{item.verifiedQuantity}</TableCell>
-                          <TableCell className="text-center">
-                            <div className="flex items-center justify-center gap-1.5 text-slate-400">
-                              <Layers className="size-3" />
-                              <span className="font-bold text-[12px]">{reqBoxesDisplay}</span>
+                        <TableRow key={idx} className="group hover:bg-slate-50/50 transition-colors border-b border-slate-50">
+                          <TableCell className="pl-5 py-3">
+                            <span className="font-mono text-[11px] font-bold text-primary">{item.productCode}</span>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <p className="text-[11px] font-medium text-slate-600 truncate max-w-[200px]">{item.description}</p>
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <span className="font-mono text-[10px] font-semibold text-slate-400">{item.batch || 'N/A'}</span>
+                          </TableCell>
+                          <TableCell className="py-3 text-center">
+                            <span className="text-[12px] font-semibold text-slate-500">{item.quantity}</span>
+                          </TableCell>
+                          <TableCell className="py-3 text-center">
+                            <span className="text-[12px] font-bold text-emerald-600">{item.verifiedQuantity}</span>
+                          </TableCell>
+                          <TableCell className="py-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <Layers className="size-3 text-slate-400" />
+                              <span className="text-[11px] font-semibold text-slate-500">{reqBoxesDisplay}</span>
                             </div>
                           </TableCell>
-                          <TableCell className="text-center">
-                            <div className="flex items-center justify-center gap-1.5 text-primary">
-                              <Package className="size-3" />
-                              <span className="font-black text-[12px]">{certBoxes}</span>
+                          <TableCell className="py-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <Package className="size-3 text-emerald-500" />
+                              <span className="text-[11px] font-bold text-emerald-600">{certBoxes}</span>
                             </div>
                           </TableCell>
-                          <TableCell className="pr-8 text-right">
-                             <Badge variant="outline" className={cn("text-[9px] font-black h-5 border-none lowercase", 
-                               item.status === 'verified' ? "bg-emerald-100 text-emerald-700" : 
-                               item.status === 'partial' ? "bg-amber-100 text-amber-700" : 
-                               "bg-red-100 text-red-700")}>
-                               {item.status}
-                             </Badge>
+                          <TableCell className="pr-5 py-3 text-right">
+                            <Badge className={cn("text-[8px] font-bold px-2 py-0.5 rounded-full border", getItemStatusColor())}>
+                              {getItemStatusText()}
+                            </Badge>
                           </TableCell>
                         </TableRow>
                       );
@@ -192,8 +258,8 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
             </CardContent>
           </Card>
 
-          {/* Tarjeta de Paginación Separada (Consistencia con el sistema) */}
-          <Card className="border border-muted/20 shadow-sm bg-white rounded-xl overflow-hidden mt-4 shrink-0">
+          {/* Paginación - consistente con OrdersPanel */}
+          <Card className="border border-slate-100 shadow-sm bg-white rounded-xl overflow-hidden shrink-0">
             <CardContent className="p-0">
               <DataTablePagination 
                 totalRows={totalItems} 
@@ -206,10 +272,14 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
             </CardContent>
           </Card>
           
-          <div className="flex justify-end items-center shrink-0 mt-6 h-14">
-             <Button onClick={onClose} className="rounded-full bg-slate-800 hover:bg-slate-900 text-white font-black px-12 h-full shadow-xl hover:scale-105 transition-transform uppercase tracking-widest text-xs gap-3">
-               <X className="size-5" /> CERRAR VISTA INFORMATIVA
-             </Button>
+          {/* Botón cerrar - consistente con los botones del sistema */}
+          <div className="flex justify-end items-center shrink-0 mt-2">
+            <Button 
+              onClick={onClose} 
+              className="dialog-btn-secondary"
+            >
+              <X className="size-3.5" /> Cerrar
+            </Button>
           </div>
         </div>
       </DialogContent>

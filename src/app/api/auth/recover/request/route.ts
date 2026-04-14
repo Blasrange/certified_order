@@ -39,6 +39,7 @@ export async function POST(request: Request) {
     const resetUrl = `${origin}/register?mode=recover-email&token=${encodeURIComponent(token)}`;
 
     await sendRecoveryEmail({
+      userId: user.id,
       to: user.email,
       name: user.name,
       resetUrl,

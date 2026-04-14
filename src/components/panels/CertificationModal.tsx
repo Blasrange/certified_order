@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef } from "react";
@@ -55,6 +54,8 @@ import { mockMaterials } from "@/lib/data";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAuth } from "@/context/auth-context";
+import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
 
 interface CertificationModalProps {
   orderGroup: OrderGroup | null;
@@ -79,6 +80,8 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
   onSave 
 }) => {
   const { toast } = useToast();
+  const { currentUser } = useAuth();
+  const appData = useFilteredAppData(currentUser);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [barcodeInput, setBarcodeInput] = useState("");
@@ -91,11 +94,8 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
 
   useEffect(() => {
     if (isOpen && orderGroup?.id) {
-      const savedManualMode = localStorage.getItem(`isManualMode_${orderGroup.id}`);
-      const savedAutoMode = localStorage.getItem(`isAutoMode_${orderGroup.id}`);
-      
-      setIsManualMode(savedManualMode === 'true');
-      setIsAutoMode(savedAutoMode !== 'false');
+      setIsManualMode(false);
+      setIsAutoMode(true);
       
       setCurrentPage(1);
       setBarcodeInput("");
@@ -111,17 +111,11 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
 
   const handleToggleManual = (val: boolean) => {
     setIsManualMode(val);
-    if (orderGroup?.id) {
-      localStorage.setItem(`isManualMode_${orderGroup.id}`, String(val));
-    }
     if (!val) setTimeout(() => inputRef.current?.focus(), 100);
   };
 
   const handleToggleAuto = (val: boolean) => {
     setIsAutoMode(val);
-    if (orderGroup?.id) {
-      localStorage.setItem(`isAutoMode_${orderGroup.id}`, String(val));
-    }
   };
 
   const groupedItems = useMemo(() => {
@@ -183,8 +177,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
   const handleProcessBarcode = (code: string) => {
     if (!code.trim() || isFinalized) return;
 
-    const savedMaterials = typeof window !== 'undefined' ? localStorage.getItem('materials') : null;
-    const materialsSource: Material[] = savedMaterials ? JSON.parse(savedMaterials) : mockMaterials;
+    const materialsSource: Material[] = appData.materials.length > 0 ? appData.materials : mockMaterials;
 
     const material = materialsSource.find(m => 
       m.code === code || m.barcode13 === code || m.barcode14 === code || 
@@ -282,7 +275,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
     
     if (isAutoMode && isFullCase) {
       setActiveBoxIndex(targetBox + 1);
-      toast({ title: `Empaque #${targetBox} listo. Preparando #${targetBox + 1}` });
+      toast({ title: `Empaque #${targetBox} completado`, description: `Se habilitó automáticamente el empaque #${targetBox + 1} para continuar la certificación.` });
     }
 
     setBarcodeInput("");
@@ -417,7 +410,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
     setActiveBoxIndex(boxNumber);
     updateLotQuantity(productCode, batch || "", 0, boxNumber);
     setActiveBoxIndex(prevActive);
-    toast({ title: "Producto retirado del empaque" });
+    toast({ title: "Producto retirado del empaque", description: `El SKU ${productCode} fue retirado correctamente de la caja ${boxNumber}.` });
   };
 
   const handleFinishStatus = (status: 'verified' | 'partial' | 'cancelled') => {
@@ -430,7 +423,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
       totalBoxes: orderGroup.boxes?.length || 1 
     });
     onClose();
-    toast({ title: "Certificación cerrada" });
+    toast({ title: "Certificación finalizada", description: "La certificación fue cerrada y su estado quedó actualizado correctamente." });
   };
 
   const totalGroups = groupedItems.length;
@@ -445,144 +438,184 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-[95vw] w-[1500px] h-[92vh] flex flex-col p-0 overflow-hidden border-none shadow-3xl bg-slate-50 rounded-[2.5rem]">
-        <DialogHeader className="p-8 pb-6 bg-white border-b relative shrink-0 space-y-6">
+      <DialogContent className="max-w-[95vw] w-[1500px] h-[92vh] flex flex-col p-0 overflow-hidden border border-slate-100 shadow-2xl rounded-2xl bg-white">
+        
+        {/* Header - consistente con OrderViewModal y OrdersPanel */}
+        <DialogHeader className="p-6 pb-4 bg-white border-b border-slate-100 shrink-0 space-y-4">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-6">
-              <div className="flex items-center gap-4">
-                <div className="size-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shadow-sm">
-                  <ScanBarcode className="size-7" />
+              <div className="flex items-center gap-3">
+                <div className="size-12 rounded-xl bg-gradient-to-br from-[#1d57b7]/10 to-[#3b82f6]/10 flex items-center justify-center text-primary shadow-sm">
+                  <ScanBarcode className="size-6" />
                 </div>
                 <div className="space-y-0.5">
-                  <DialogTitle className="text-2xl font-black tracking-tighter text-slate-800">
+                  <DialogTitle className="text-xl font-bold tracking-tight text-slate-800">
                     Certificación {orderGroup.id}
                   </DialogTitle>
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-[9px] font-black uppercase border-primary/20 bg-primary/5 text-primary">Pedido #{orderGroup.orderNumber}</Badge>
-                    <Badge className={cn("text-[8px] font-black px-2 py-0.5 uppercase", 
-                      (orderGroup.status === 'pending' || orderGroup.status === 'cancelled') ? "bg-red-50 text-red-600" : 
-                      orderGroup.status === 'partial' ? "bg-amber-50 text-amber-600" : "bg-green-50 text-green-600")}>
-                      {orderGroup.isFinalized ? 'Finalizado' : orderGroup.status}
+                    <Badge variant="outline" className="text-[9px] font-semibold border-primary/20 bg-primary/5 text-primary rounded-full px-2.5 py-0.5">
+                      Pedido #{orderGroup.orderNumber}
+                    </Badge>
+                    <Badge className={cn("text-[8px] font-bold px-2.5 py-0.5 rounded-full border", 
+                      (orderGroup.status === 'pending' || orderGroup.status === 'cancelled') ? "bg-red-50 text-red-600 border-red-100" : 
+                      orderGroup.status === 'partial' ? "bg-amber-50 text-amber-600 border-amber-100" : 
+                      "bg-emerald-50 text-emerald-600 border-emerald-100")}>
+                      {orderGroup.isFinalized ? 'Finalizado' : orderGroup.status === 'partial' ? 'Parcial' : 'Pendiente'}
                     </Badge>
                   </div>
                 </div>
               </div>
 
-              <div className="h-10 w-px bg-slate-100 mx-2" />
+              <div className="h-10 w-px bg-slate-200" />
 
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 p-1 bg-slate-50 rounded-full border shadow-inner px-3 h-11">
-                  <span className="text-[8px] font-black uppercase text-slate-400 mr-1 pl-1">Ref:</span>
-                  <Button variant="ghost" size="icon" className="size-7 rounded-full bg-white border shadow-sm" onClick={() => setActiveBoxIndex(Math.max(1, activeBoxIndex - 1))}><ChevronLeft className="size-3.5"/></Button>
-                  <Badge className="bg-primary px-3 h-7 rounded-full text-[10px] font-black uppercase shadow-md shadow-primary/20">Empaque #{activeBoxIndex}</Badge>
-                  <Button variant="ghost" size="icon" className="size-7 rounded-full bg-white border shadow-sm" onClick={() => setActiveBoxIndex(activeBoxIndex + 1)}><ChevronRight className="size-3.5"/></Button>
+              {/* Navegación de empaques */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1 p-1 bg-slate-50 rounded-xl border border-slate-100">
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-8 w-8 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10"
+                    onClick={() => setActiveBoxIndex(Math.max(1, activeBoxIndex - 1))}
+                  >
+                    <ChevronLeft className="size-3.5"/>
+                  </Button>
+                  <Badge className="bg-primary px-3 h-7 rounded-lg text-[10px] font-bold shadow-sm shadow-primary/20">
+                    Empaque #{activeBoxIndex}
+                  </Badge>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-8 w-8 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10"
+                    onClick={() => setActiveBoxIndex(activeBoxIndex + 1)}
+                  >
+                    <ChevronRight className="size-3.5"/>
+                  </Button>
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon" className="size-7 rounded-full text-primary bg-white border shadow-sm hover:bg-primary/5 ml-0.5" onClick={() => {
-                          const maxBox = orderGroup.boxes?.length ? Math.max(...orderGroup.boxes.map(b => b.boxNumber)) : 0;
-                          setActiveBoxIndex(maxBox + 1);
-                        }}>
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-8 w-8 rounded-lg text-primary hover:bg-primary/10 ml-0.5"
+                          onClick={() => {
+                            const maxBox = orderGroup.boxes?.length ? Math.max(...orderGroup.boxes.map(b => b.boxNumber)) : 0;
+                            setActiveBoxIndex(maxBox + 1);
+                          }}
+                        >
                           <Plus className="size-3.5"/>
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent><p className="text-[10px] font-bold">Nuevo Empaque</p></TooltipContent>
+                      <TooltipContent className="bg-white border border-slate-100 shadow-lg rounded-xl text-[10px] font-semibold">
+                        Nuevo empaque
+                      </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
                 </div>
 
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center justify-between px-3 h-5 bg-white rounded-full border border-slate-100 shadow-sm min-w-[100px]">
-                    <span className="text-[7px] font-black uppercase text-slate-400">Manual</span>
-                    <Switch checked={isManualMode} onCheckedChange={handleToggleManual} className="scale-[0.45]" />
+                {/* Switches de modo */}
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-lg border border-slate-100">
+                    <span className="text-[8px] font-semibold text-slate-400 uppercase tracking-wider">Manual</span>
+                    <Switch checked={isManualMode} onCheckedChange={handleToggleManual} className="scale-75" />
                   </div>
-                  <div className="flex items-center justify-between px-3 h-5 bg-white rounded-full border border-slate-100 shadow-sm min-w-[100px]">
-                    <div className="flex items-center gap-1">
-                      <Zap className={cn("size-2", isAutoMode ? "text-primary fill-primary" : "text-slate-300")} />
-                      <span className="text-[7px] font-black uppercase text-slate-400">Auto</span>
-                    </div>
-                    <Switch checked={isAutoMode} onCheckedChange={handleToggleAuto} className="scale-[0.45]" />
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-lg border border-slate-100">
+                    <Zap className={cn("size-2.5", isAutoMode ? "text-primary" : "text-slate-300")} />
+                    <span className="text-[8px] font-semibold text-slate-400 uppercase tracking-wider">Auto</span>
+                    <Switch checked={isAutoMode} onCheckedChange={handleToggleAuto} className="scale-75" />
                   </div>
                 </div>
 
+                {/* Input de escaneo */}
                 {!isManualMode && !isFinalized && (
                   <div className="relative">
-                    <ScanBarcode className="absolute left-4 top-1/2 -translate-y-1/2 size-4 text-primary opacity-50" />
+                    <ScanBarcode className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
                     <input 
                       ref={inputRef} 
                       value={barcodeInput} 
                       onChange={(e) => setBarcodeInput(e.target.value)} 
                       onKeyDown={(e) => e.key === 'Enter' && handleProcessBarcode(barcodeInput)} 
-                      placeholder="Escanear en empaque activo..." 
-                      className="h-11 w-96 rounded-full pl-12 pr-4 border-primary/30 border bg-white font-bold text-xs text-slate-700 outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary transition-all shadow-sm" 
+                      placeholder="Escanear producto en empaque activo..." 
+                      className="h-10 w-80 rounded-xl pl-10 pr-4 border-slate-200 bg-white text-sm font-medium text-slate-700 placeholder:text-slate-400 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all" 
                     />
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="flex items-center bg-slate-50/80 px-6 py-3 rounded-2xl border border-slate-100 shadow-inner">
-              <div className="flex flex-col items-center pr-6 border-r border-slate-200">
-                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">TOTAL EMPAQUES</span>
-                <span className="text-xl font-black text-primary">{(orderGroup.boxes?.length || 0)}</span>
+            {/* Panel de estadísticas compacto */}
+            <div className="flex items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
+              <div className="text-center px-3">
+                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Empaques</p>
+                <p className="text-xl font-bold text-primary">{(orderGroup.boxes?.length || 0)}</p>
               </div>
-              <div className="flex flex-col items-center pl-6">
-                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">UNIDADES</span>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-xl font-black text-slate-800">{verifiedTotal}</span>
-                  <span className="text-[10px] font-bold text-slate-300">/ {requestedTotal}</span>
+              <div className="w-px h-8 bg-slate-200" />
+              <div className="text-center px-3">
+                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Unidades</p>
+                <div className="flex items-baseline gap-0.5">
+                  <span className="text-xl font-bold text-emerald-600">{verifiedTotal}</span>
+                  <span className="text-xs font-semibold text-slate-300">/{requestedTotal}</span>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="flex justify-between items-end">
-            <div className="flex items-center gap-8 pl-2">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-100 rounded-xl text-slate-500"><Building2 className="size-4" /></div>
-                <div className="flex flex-col">
-                  <span className="text-[9px] font-black text-slate-400 uppercase leading-none">Cliente</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-700">{orderGroup.customerName}</span>
-                    <Badge variant="outline" className="text-[8px] font-mono border-slate-200 text-slate-400 bg-slate-50 uppercase">NIT: {orderGroup.nit}</Badge>
-                  </div>
+          {/* Info de cliente y tienda */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
+                  <Building2 className="size-3.5" />
+                </div>
+                <div>
+                  <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Cliente</p>
+                  <p className="text-xs font-bold text-slate-700">{orderGroup.customerName}</p>
+                  <p className="text-[9px] font-mono text-slate-400">NIT: {orderGroup.nit}</p>
                 </div>
               </div>
-              <div className="h-8 w-px bg-slate-200" />
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-100 rounded-xl text-slate-500"><StoreIcon className="size-4" /></div>
-                <div className="flex flex-col">
-                  <span className="text-[9px] font-black text-slate-400 uppercase leading-none">Punto de Entrega</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-700">{orderGroup.storeName}</span>
-                    <Badge variant="outline" className="text-[8px] font-mono border-slate-200 text-slate-400 bg-slate-50 uppercase">CÓD: {orderGroup.storeCode}</Badge>
-                  </div>
+              <div className="w-px h-7 bg-slate-200" />
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
+                  <StoreIcon className="size-3.5" />
+                </div>
+                <div>
+                  <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Punto de venta</p>
+                  <p className="text-xs font-bold text-slate-700 truncate max-w-[200px]">{orderGroup.storeName}</p>
+                  <p className="text-[9px] font-mono text-slate-400">Cód: {orderGroup.storeCode}</p>
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-3 mb-1">
-              <span className="text-[9px] font-black text-primary uppercase">Progreso certificación</span>
-              <Badge className="bg-primary text-white font-black text-[10px] rounded-lg">{Math.round(progressPercent)}%</Badge>
+            <div className="flex items-center gap-3">
+              <span className="text-[9px] font-semibold text-slate-500 uppercase tracking-wider">Progreso</span>
+              <Badge className="bg-primary text-white font-bold text-[10px] rounded-full px-2.5 py-0.5">
+                {Math.round(progressPercent)}%
+              </Badge>
             </div>
           </div>
-          <div className="pt-2"><Progress value={progressPercent} className="h-1.5 rounded-full bg-slate-100" /></div>
+          
+          {/* Barra de progreso */}
+          <div className="pt-1">
+            <Progress value={progressPercent} className="h-1.5 rounded-full bg-slate-100" />
+          </div>
         </DialogHeader>
 
-        <div className="flex-1 overflow-hidden flex flex-col p-8 gap-6">
-          <div className="grid grid-cols-12 gap-6 flex-1 overflow-hidden">
+        {/* Cuerpo del Modal */}
+        <div className="flex-1 overflow-hidden flex flex-col p-6 gap-5">
+          <div className="grid grid-cols-12 gap-5 flex-1 overflow-hidden">
+            
+            {/* Columna izquierda - Tabla de SKUs */}
             <div className="col-span-9 flex flex-col overflow-hidden">
-              <Card className="border border-muted/20 shadow-sm rounded-3xl overflow-hidden bg-white flex flex-col flex-1">
+              <Card className="border border-slate-100 shadow-sm rounded-xl overflow-hidden bg-white flex flex-col flex-1">
                 <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
                   <ScrollArea className="flex-1">
                     <Table>
-                      <TableHeader className="bg-muted/5 h-12 sticky top-0 z-10 backdrop-blur-sm">
-                        <TableRow>
-                          <TableHead className="pl-8 text-[10px] font-black text-slate-800 uppercase">Sku / Código</TableHead>
-                          <TableHead className="text-[10px] font-black text-slate-800 uppercase">Descripción Técnica</TableHead>
-                          <TableHead className="text-[10px] font-black text-slate-800 uppercase">Lote</TableHead>
-                          <TableHead className="text-center text-[10px] font-black text-slate-400 uppercase w-24">Solicitado</TableHead>
-                          <TableHead className="text-center text-[10px] font-black text-primary uppercase w-32">Certificado</TableHead>
-                          <TableHead className="pr-8 text-right text-[10px] font-black text-slate-800 uppercase">Estado</TableHead>
+                      <TableHeader className="bg-slate-50/80 sticky top-0 z-10">
+                        <TableRow className="border-b border-slate-100">
+                          <TableHead className="pl-5 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">SKU / Código</TableHead>
+                          <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Descripción</TableHead>
+                          <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Lote</TableHead>
+                          <TableHead className="py-3 text-center text-[10px] font-bold text-slate-500 uppercase tracking-wider w-24">Solicitado</TableHead>
+                          <TableHead className="py-3 text-center text-[10px] font-bold text-emerald-600 uppercase tracking-wider w-32">Certificado</TableHead>
+                          <TableHead className="pr-5 py-3 text-right text-[10px] font-bold text-slate-500 uppercase tracking-wider">Estado</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -595,63 +628,80 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                           const hasMultipleLots = group.lots.length > 1;
 
                           return (
-                            <TableRow key={idx} className="h-14 border-b transition-colors hover:bg-slate-50/50">
-                              <TableCell className="pl-8 font-mono font-bold text-[10px] text-primary">{group.productCode}</TableCell>
-                              <TableCell className="font-bold text-[10px] text-slate-600 truncate max-w-[220px] uppercase">{group.description}</TableCell>
-                              <TableCell>
+                            <TableRow key={idx} className="group hover:bg-slate-50/50 transition-colors border-b border-slate-50">
+                              <TableCell className="pl-5 py-3">
+                                <span className="font-mono text-[11px] font-bold text-primary">{group.productCode}</span>
+                              </TableCell>
+                              <TableCell className="py-3">
+                                <p className="text-[11px] font-medium text-slate-600 truncate max-w-[200px]">{group.description}</p>
+                              </TableCell>
+                              <TableCell className="py-3">
                                 <TooltipProvider>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <div className="flex items-center gap-1.5 cursor-help group/lot">
-                                        <span className={cn("text-[10px] font-mono font-bold uppercase", hasMultipleLots ? "text-amber-600" : "text-slate-400")}>
-                                          {hasMultipleLots ? "Múltiple Lote" : (group.lots[0]?.batch || 'N/A')}
+                                      <div className="flex items-center gap-1.5 cursor-help">
+                                        <span className={cn("text-[10px] font-mono font-semibold", hasMultipleLots ? "text-amber-600" : "text-slate-400")}>
+                                          {hasMultipleLots ? "Múltiple lote" : (group.lots[0]?.batch || 'N/A')}
                                         </span>
                                         {hasMultipleLots && <Info className="size-3 text-amber-400" />}
                                       </div>
                                     </TooltipTrigger>
-                                    <TooltipContent className="bg-white border-none shadow-3xl p-4 rounded-2xl">
-                                      <div className="space-y-3">
-                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest border-b pb-2">Desglose de Lotes</p>
-                                        <div className="space-y-2">
-                                          {group.lots.map((lot, i) => (
-                                            <div key={i} className="flex items-center justify-between gap-6">
-                                              <span className="text-[10px] font-mono font-bold text-slate-600">{lot.batch || 'N/A'}</span>
-                                              <div className="flex items-center gap-2">
-                                                <Badge variant="outline" className="text-[9px] font-black bg-slate-50">{lot.verifiedQuantity} / {lot.quantity}</Badge>
-                                                {lot.verifiedQuantity >= lot.quantity && <CheckCircle2 className="size-3 text-emerald-500" />}
-                                              </div>
+                                    <TooltipContent className="bg-white border border-slate-100 shadow-lg p-3 rounded-xl">
+                                      <div className="space-y-2">
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider border-b pb-1.5 mb-1">Desglose de lotes</p>
+                                        {group.lots.map((lot, i) => (
+                                          <div key={i} className="flex items-center justify-between gap-4">
+                                            <span className="text-[10px] font-mono font-semibold text-slate-600">{lot.batch || 'N/A'}</span>
+                                            <div className="flex items-center gap-2">
+                                              <Badge variant="outline" className="text-[9px] font-bold bg-slate-50 rounded-full">
+                                                {lot.verifiedQuantity} / {lot.quantity}
+                                              </Badge>
+                                              {lot.verifiedQuantity >= lot.quantity && <CheckCircle2 className="size-3 text-emerald-500" />}
                                             </div>
-                                          ))}
-                                        </div>
+                                          </div>
+                                        ))}
                                       </div>
                                     </TooltipContent>
                                   </Tooltip>
                                 </TooltipProvider>
                               </TableCell>
-                              <TableCell className="text-center font-bold text-[11px] text-slate-400">{group.totalQuantity}</TableCell>
-                              <TableCell className="text-center">
+                              <TableCell className="py-3 text-center">
+                                <span className="text-[11px] font-semibold text-slate-500">{group.totalQuantity}</span>
+                              </TableCell>
+                              <TableCell className="py-3 text-center">
                                 {isManualMode && !isFinalized ? (
-                                  <div className="flex flex-col items-center gap-1 py-1">
+                                  <div className="flex flex-col items-center gap-1">
                                     <Input 
                                       type="number" 
                                       value={qtyInThisBox} 
                                       onChange={(e) => updateGroupQuantityManual(group.productCode, Number(e.target.value))} 
                                       disabled={isFull}
                                       className={cn(
-                                        "w-20 h-8 text-center font-black rounded-lg border-primary bg-primary/5 focus:ring-primary/20 text-xs",
+                                        "w-20 h-8 text-center font-bold rounded-lg border-primary/30 bg-primary/5 focus:ring-primary/20 text-xs",
                                         isFull && "opacity-50 cursor-not-allowed bg-slate-100 border-slate-200"
                                       )} 
                                     />
-                                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-tighter">TOTAL: {group.totalVerified}</span>
+                                    <span className="text-[8px] font-semibold text-slate-400 uppercase tracking-wider">
+                                      Total: {group.totalVerified}
+                                    </span>
                                   </div>
                                 ) : (
-                                  <span className={cn("text-[11px] font-black", group.totalVerified >= group.totalQuantity ? "text-primary" : group.totalVerified > 0 ? "text-amber-600" : "text-slate-300")}>
+                                  <span className={cn("text-[11px] font-bold", 
+                                    group.totalVerified >= group.totalQuantity ? "text-emerald-600" : 
+                                    group.totalVerified > 0 ? "text-amber-600" : "text-slate-300"
+                                  )}>
                                     {group.totalVerified}
                                   </span>
                                 )}
                               </TableCell>
-                              <TableCell className="pr-8 text-right">
-                                 <Badge variant="outline" className={cn("text-[8px] font-black h-4 border-none lowercase", group.status === 'verified' ? "bg-emerald-100 text-emerald-700" : group.status === 'partial' ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700")}>{group.status}</Badge>
+                              <TableCell className="pr-5 py-3 text-right">
+                                <Badge className={cn("text-[8px] font-bold px-2 py-0.5 rounded-full border", 
+                                  group.status === 'verified' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : 
+                                  group.status === 'partial' ? "bg-amber-50 text-amber-700 border-amber-100" : 
+                                  "bg-red-50 text-red-700 border-red-100"
+                                )}>
+                                  {group.status === 'verified' ? 'Certificado' : group.status === 'partial' ? 'Parcial' : 'Pendiente'}
+                                </Badge>
                               </TableCell>
                             </TableRow>
                           );
@@ -661,62 +711,93 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                   </ScrollArea>
                 </CardContent>
               </Card>
-              <Card className="border border-muted/20 shadow-sm bg-white rounded-2xl overflow-hidden mt-4 shrink-0">
+              
+              {/* Paginación */}
+              <Card className="border border-slate-100 shadow-sm bg-white rounded-xl overflow-hidden mt-4 shrink-0">
                 <CardContent className="p-0">
-                  <DataTablePagination totalRows={totalGroups} pageSize={itemsPerPage} onPageSizeChange={setItemsPerPage} currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+                  <DataTablePagination 
+                    totalRows={totalGroups} 
+                    pageSize={itemsPerPage} 
+                    onPageSizeChange={setItemsPerPage} 
+                    currentPage={currentPage} 
+                    totalPages={totalPages} 
+                    onPageChange={setCurrentPage} 
+                  />
                 </CardContent>
               </Card>
             </div>
 
+            {/* Columna derecha - Detalle de empaques */}
             <div className="col-span-3 flex flex-col gap-4 overflow-hidden">
-              <Card className="border border-muted/20 shadow-sm rounded-[2.5rem] bg-white flex flex-col flex-1 overflow-hidden">
-                <CardHeader className="p-6 pb-4 shrink-0 border-b bg-slate-50/50">
+              <Card className="border border-slate-100 shadow-sm rounded-xl bg-white flex flex-col flex-1 overflow-hidden">
+                <CardHeader className="p-4 pb-3 shrink-0 border-b border-slate-100 bg-white">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-primary/10 rounded-xl text-primary"><Box className="size-5" /></div>
-                      <CardTitle className="text-sm font-black uppercase tracking-widest text-slate-800">Detalle Empaque</CardTitle>
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 bg-gradient-to-br from-primary/10 to-primary/5 rounded-lg text-primary">
+                        <Box className="size-4" />
+                      </div>
+                      <CardTitle className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                        Detalle Empaque
+                      </CardTitle>
                     </div>
-                    <Badge variant="outline" className="bg-white text-[10px] font-bold border-slate-200">{(orderGroup.boxes?.length || 0)} Empaques</Badge>
+                    <Badge variant="outline" className="text-[9px] font-bold bg-slate-50 rounded-full">
+                      {(orderGroup.boxes?.length || 0)} empaques
+                    </Badge>
                   </div>
                 </CardHeader>
-                <CardContent className="p-0 flex-1 overflow-hidden flex flex-col">
-                  <ScrollArea className="flex-1 p-6">
+                <CardContent className="p-0 flex-1 overflow-hidden">
+                  <ScrollArea className="h-full p-4">
                     {(!orderGroup.boxes || orderGroup.boxes.length === 0) ? (
-                      <div className="h-full flex flex-col items-center justify-center opacity-30 py-12">
-                        <ScanBarcode className="size-12 mb-4 text-slate-400" />
-                        <p className="text-[10px] font-black uppercase text-center text-slate-500">Sin empaques.<br/>Empieza a certificar.</p>
+                      <div className="h-full flex flex-col items-center justify-center opacity-40 py-12">
+                        <ScanBarcode className="size-10 text-slate-300 mb-3" />
+                        <p className="text-[10px] font-semibold uppercase text-center text-slate-400">
+                          Sin empaques.<br/>Empieza a certificar.
+                        </p>
                       </div>
                     ) : (
-                      <div className="space-y-6">
+                      <div className="space-y-3">
                         {[...orderGroup.boxes].sort((a,b) => a.boxNumber - b.boxNumber).map((box, i) => (
                           <div 
                             key={i} 
                             onClick={() => setActiveBoxIndex(box.boxNumber)}
                             className={cn(
-                              "rounded-[1.5rem] border transition-all cursor-pointer group",
-                              activeBoxIndex === box.boxNumber ? "bg-primary/5 border-primary shadow-md" : "bg-white border-slate-100 hover:border-primary/30"
+                              "rounded-xl border transition-all cursor-pointer",
+                              activeBoxIndex === box.boxNumber ? "bg-primary/5 border-primary shadow-sm" : "bg-white border-slate-100 hover:border-primary/30"
                             )}
                           >
-                            <div className="p-4 border-b border-inherit flex items-center justify-between">
+                            <div className="p-3 border-b border-inherit flex items-center justify-between">
                               <div className="flex items-center gap-2">
-                                <span className={cn("text-[10px] font-black uppercase", activeBoxIndex === box.boxNumber ? "text-primary" : "text-slate-400")}>Empaque #{box.boxNumber}</span>
-                                {activeBoxIndex === box.boxNumber && <Badge className="bg-primary text-[8px] font-black h-4 px-1.5 uppercase">Activo</Badge>}
+                                <span className={cn("text-[10px] font-bold uppercase", 
+                                  activeBoxIndex === box.boxNumber ? "text-primary" : "text-slate-500"
+                                )}>
+                                  Empaque #{box.boxNumber}
+                                </span>
+                                {activeBoxIndex === box.boxNumber && (
+                                  <Badge className="bg-primary text-[8px] font-bold h-4 px-1.5 rounded-full uppercase">
+                                    Activo
+                                  </Badge>
+                                )}
                               </div>
-                              <ArrowRightCircle className={cn("size-4 transition-transform", activeBoxIndex === box.boxNumber ? "text-primary" : "text-slate-200 opacity-0 group-hover:opacity-100")} />
+                              <ArrowRightCircle className={cn("size-3.5 transition-transform", 
+                                activeBoxIndex === box.boxNumber ? "text-primary" : "text-slate-200"
+                              )} />
                             </div>
-                            <div className="p-4 space-y-3">
+                            <div className="p-3 space-y-2">
                               {box.items.map((bi, idx) => (
-                                <div key={idx} className="flex items-center justify-between gap-3 group/item">
-                                  <div className="flex flex-col min-w-0">
-                                    <span className="text-[10px] font-black text-slate-700 truncate">{bi.productCode}</span>
-                                    <span className="text-[8px] font-mono text-slate-400 truncate">Lote: {bi.batch}</span>
+                                <div key={idx} className="flex items-center justify-between gap-2 group/item">
+                                  <div className="flex flex-col min-w-0 flex-1">
+                                    <span className="text-[10px] font-bold text-slate-700 truncate">{bi.productCode}</span>
+                                    <span className="text-[8px] font-mono text-slate-400 truncate">Lote: {bi.batch || 'N/A'}</span>
                                   </div>
-                                  <div className="flex items-center gap-2">
-                                    <Badge variant="secondary" className="bg-slate-100 text-slate-600 font-black text-[9px] px-2 h-5 shrink-0">{bi.quantity} U</Badge>
+                                  <div className="flex items-center gap-1.5">
+                                    <Badge variant="secondary" className="bg-slate-100 text-slate-600 font-bold text-[9px] px-2 h-5 rounded-full">
+                                      {bi.quantity} U
+                                    </Badge>
                                     {!isFinalized && (
                                       <Button 
-                                        variant="ghost" size="icon" 
-                                        className="size-6 rounded-full text-slate-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover/item:opacity-100 transition-all"
+                                        variant="ghost" 
+                                        size="icon" 
+                                        className="size-6 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover/item:opacity-100 transition-all"
                                         onClick={(e) => { e.stopPropagation(); handleRemoveLotFromBox(box.boxNumber, bi.productCode, bi.batch); }}
                                       >
                                         <X className="size-3" />
@@ -736,34 +817,46 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
             </div>
           </div>
           
-          <div className="flex justify-end items-center mt-2 gap-6 h-16 shrink-0">
-             {!isFinalized ? (
-                <div className="flex items-center gap-3">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button className="size-14 rounded-full bg-primary text-white shadow-2xl shadow-primary/30 hover:scale-110 transition-transform flex items-center justify-center p-0 border-none">
-                        <Settings2 className="size-7" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-64 border-none shadow-3xl rounded-2xl p-2 bg-white">
-                      <DropdownMenuItem onClick={() => { toast({ title: "Guardado temporal" }); onClose(); }} className="h-12 rounded-xl cursor-pointer gap-3 font-bold text-slate-600">
-                        <PauseCircle className="size-5" /> Pausar
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => handleFinishStatus('partial')} className="h-12 rounded-xl cursor-pointer gap-3 font-bold text-amber-600">
-                        <ClipboardList className="size-5" /> Finalizar Parcial
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleFinishStatus('verified')} className="h-12 rounded-xl cursor-pointer gap-3 font-bold text-emerald-600">
-                        <CheckCircle2 className="size-5" /> Finalizar 100%
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-             ) : (
-               <Button onClick={onClose} className="rounded-full bg-slate-800 hover:bg-slate-900 text-white font-black px-12 h-12 shadow-xl hover:scale-105 transition-transform uppercase tracking-widest text-[10px] gap-3">
-                 <X className="size-4" /> CERRAR VISTA OPERATIVA
-               </Button>
-             )}
+          {/* Botones de acción */}
+          <div className="flex justify-end items-center mt-2 gap-4 shrink-0">
+            {!isFinalized ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button className="bg-primary rounded-xl h-10 px-6 font-semibold">
+                    <Settings2 className="size-4" />
+                    Acciones
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 p-1.5 rounded-xl border border-slate-100 shadow-lg bg-white">
+                  <DropdownMenuItem 
+                    onClick={() => { toast({ title: "Avance guardado temporalmente", description: "La certificación quedó pausada con la información registrada hasta este momento." }); onClose(); }} 
+                    className="rounded-lg h-10 gap-2.5 text-sm font-medium cursor-pointer text-slate-600"
+                  >
+                    <PauseCircle className="size-4" /> Pausar
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className="my-1" />
+                  <DropdownMenuItem 
+                    onClick={() => handleFinishStatus('partial')} 
+                    className="rounded-lg h-10 gap-2.5 text-sm font-medium cursor-pointer text-amber-600 focus:bg-amber-50"
+                  >
+                    <ClipboardList className="size-4" /> Finalizar Parcial
+                  </DropdownMenuItem>
+                  <DropdownMenuItem 
+                    onClick={() => handleFinishStatus('verified')} 
+                    className="rounded-lg h-10 gap-2.5 text-sm font-medium cursor-pointer text-emerald-600 focus:bg-emerald-50"
+                  >
+                    <CheckCircle2 className="size-4" /> Finalizar 100%
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Button 
+                onClick={onClose} 
+                className="dialog-btn-secondary"
+              >
+                <X className="size-3.5" /> Cerrar
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>

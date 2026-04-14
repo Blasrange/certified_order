@@ -1,78 +1,126 @@
-
 'use client';
 
-import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import type { User } from '@/lib/types';
-import { mockRoles, mockUsers } from '@/lib/data';
-import {
-  hydrateLocalCacheFromDatabase,
-  persistRoles,
-  persistUsers,
-} from '@/lib/app-data-client';
 import { useRouter } from 'next/navigation';
+import { AppLogo } from '@/components/icons';
+import { SystemLoadingOverlay } from '@/components/ui/system-loading-overlay';
 
 interface AuthContextType {
   currentUser: User | null;
-  login: (username: string, password: string) => User;
+  login: (username: string, password: string) => Promise<User>;
   logout: () => void;
-  updatePassword: (newPassword: string) => void;
+  updatePassword: (newPassword: string) => Promise<void>;
+  refreshCurrentUser: () => Promise<User | null>;
   loading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const getPrefix = (docType?: string) => {
-  switch (docType) {
-    case 'Cédula de ciudadanía': return 'CC';
-    case 'Cédula de extranjería': return 'CE';
-    case 'Pasaporte': return 'PA';
-    default: return '';
-  }
-};
+const IDLE_TIMEOUT_MS = 20 * 60 * 1000;
+const SESSION_CHECK_INTERVAL_MS = 30 * 1000;
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const idleTimeoutRef = useRef<number | null>(null);
+  const lastActivityAtRef = useRef<number>(Date.now());
+
+  const clearIdleTimeout = useCallback(() => {
+    if (idleTimeoutRef.current !== null && typeof window !== 'undefined') {
+      window.clearTimeout(idleTimeoutRef.current);
+      idleTimeoutRef.current = null;
+    }
+  }, []);
+
+  const performLogout = useCallback(async (reason?: 'idle-timeout') => {
+    clearIdleTimeout();
+    setCurrentUser(null);
+
+    try {
+      await fetch('/api/auth/session', { method: 'DELETE' });
+    } catch (error) {
+      console.error('No se pudo cerrar la sesión en el servidor.', error);
+    }
+
+    if (reason && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.assign('/login?reason=idle-timeout');
+    }
+  }, [clearIdleTimeout]);
+
+  const logout = useCallback(() => {
+    void performLogout();
+  }, [performLogout]);
+
+  const expireSessionIfNeeded = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+
+    if (!currentUser) {
+      return false;
+    }
+
+    if (Date.now() - lastActivityAtRef.current < IDLE_TIMEOUT_MS) {
+      return false;
+    }
+
+    void performLogout('idle-timeout');
+
+    return true;
+  }, [currentUser, performLogout]);
+
+  const scheduleIdleLogout = useCallback((lastActivityAt: number) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    clearIdleTimeout();
+
+    const remainingMs = IDLE_TIMEOUT_MS - (Date.now() - lastActivityAt);
+    if (remainingMs <= 0) {
+      expireSessionIfNeeded();
+      return;
+    }
+
+    idleTimeoutRef.current = window.setTimeout(() => {
+      expireSessionIfNeeded();
+    }, remainingMs);
+  }, [clearIdleTimeout, expireSessionIfNeeded]);
+
+  const registerActivity = useCallback(() => {
+    if (typeof window === 'undefined' || !currentUser) {
+      return;
+    }
+
+    const now = Date.now();
+    lastActivityAtRef.current = now;
+    scheduleIdleLogout(now);
+  }, [currentUser, scheduleIdleLogout]);
+
+  const refreshCurrentUser = useCallback(async () => {
+    try {
+      const response = await fetch('/api/auth/session', { cache: 'no-store' });
+      const payload = (await response.json().catch(() => null)) as { user?: User | null } | null;
+
+      if (response.ok && payload?.user) {
+        setCurrentUser(payload.user);
+        lastActivityAtRef.current = Date.now();
+        return payload.user;
+      }
+
+      setCurrentUser(null);
+      return null;
+    } catch (error) {
+      console.error('No se pudo refrescar la sesión actual.', error);
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     const initializeAuth = async () => {
       try {
-        const storedUser = localStorage.getItem('currentUser');
-        if (storedUser) {
-          setCurrentUser(JSON.parse(storedUser));
-        }
-
-        try {
-          await hydrateLocalCacheFromDatabase();
-        } catch (error) {
-          console.warn('No se pudo hidratar la cache desde Supabase, se mantiene cache local.', error);
-        }
-
-        const savedUsersStr = localStorage.getItem('users');
-        const currentUsers: User[] = savedUsersStr ? JSON.parse(savedUsersStr) : [];
-        const savedRolesStr = localStorage.getItem('appRoles');
-
-        if (!savedRolesStr) {
-          localStorage.setItem('appRoles', JSON.stringify(mockRoles));
-          try {
-            await persistRoles(mockRoles);
-          } catch (error) {
-            console.warn('No se pudieron sincronizar los roles base.', error);
-          }
-        }
-
-        const adminExists = currentUsers.some(
-          (user) => user.id === 'USER-ADMIN' || user.loginId === 'CC1000000001'
-        );
-
-        if (!adminExists) {
-          localStorage.setItem('users', JSON.stringify([...mockUsers]));
-          try {
-            await persistUsers(mockUsers);
-          } catch (error) {
-            console.warn('No se pudo sincronizar el usuario administrador inicial.', error);
-          }
-        }
+        await refreshCurrentUser();
       } catch (error) {
         console.error('Could not initialize auth data', error);
       }
@@ -81,67 +129,122 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
 
     void initializeAuth();
-  }, []);
+  }, [refreshCurrentUser]);
 
-  const login = (username: string, password: string): User => {
-    const savedUsersStr = localStorage.getItem('users');
-    const usersSource = savedUsersStr ? JSON.parse(savedUsersStr) : mockUsers;
-    
+  const login = async (username: string, password: string): Promise<User> => {
     const cleanUsername = username.trim().toUpperCase();
     const cleanPassword = password.trim();
 
-    const user = usersSource.find((u: User) => {
-      const calculatedLoginId = (u.loginId || `${getPrefix(u.documentType)}${u.documentNumber}`).toUpperCase();
-      const matchesId = calculatedLoginId === cleanUsername;
-      const matchesPass = u.password === cleanPassword;
-      return matchesId && matchesPass;
+    const response = await fetch('/api/auth/session', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        loginId: cleanUsername,
+        password: cleanPassword,
+      }),
     });
 
-    if (user) {
-      if (!user.isActive) {
-        throw new Error('Tu cuenta está inactivada. Contacta al administrador.');
-      }
-      const userToStore = { ...user };
-      delete userToStore.password;
-      
-      setCurrentUser(userToStore);
-      localStorage.setItem('currentUser', JSON.stringify(userToStore));
-      return user;
-    } else {
-      throw new Error('Credenciales inválidas. Verifique su usuario y contraseña.');
+    const payload = (await response.json().catch(() => null)) as { error?: string; user?: User } | null;
+
+    if (!response.ok || !payload?.user) {
+      throw new Error(payload?.error || 'Credenciales inválidas. Verifique su usuario y contraseña.');
     }
+
+    setCurrentUser(payload.user);
+    lastActivityAtRef.current = Date.now();
+    return payload.user;
   };
 
-  const logout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem('currentUser');
+  const updatePassword = async (newPassword: string) => {
+    if (!currentUser?.loginId) {
+      throw new Error('No hay una sesión válida para actualizar la contraseña.');
+    }
+
+    const response = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        loginId: currentUser.loginId,
+        email: currentUser.email,
+        password: newPassword,
+      }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as { error?: string; user?: User } | null;
+
+    if (!response.ok || !payload?.user) {
+      throw new Error(payload?.error || 'No se pudo actualizar la contraseña.');
+    }
+
+    setCurrentUser(payload.user);
+    lastActivityAtRef.current = Date.now();
   };
 
-  const updatePassword = (newPassword: string) => {
-    if (!currentUser) return;
-    
-    const savedUsersStr = localStorage.getItem('users');
-    const usersSource = savedUsersStr ? JSON.parse(savedUsersStr) : [...mockUsers];
-    
-    const updatedUsers = usersSource.map((u: any) => {
-      if (u.id === currentUser.id) {
-        return { ...u, password: newPassword, isFirstLogin: false };
+  useEffect(() => {
+    if (typeof window === 'undefined' || !currentUser) {
+      clearIdleTimeout();
+      return;
+    }
+
+    if (expireSessionIfNeeded()) {
+      return;
+    }
+
+    scheduleIdleLogout(lastActivityAtRef.current || Date.now());
+    const sessionCheckInterval = window.setInterval(() => {
+      expireSessionIfNeeded();
+    }, SESSION_CHECK_INTERVAL_MS);
+
+    const activityEvents: Array<keyof WindowEventMap> = [
+      'mousedown',
+      'mousemove',
+      'keydown',
+      'scroll',
+      'touchstart',
+      'click',
+    ];
+
+    const handleActivity = () => {
+      registerActivity();
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        if (!expireSessionIfNeeded()) {
+          registerActivity();
+        }
       }
-      return u;
-    });
+    };
 
-    localStorage.setItem('users', JSON.stringify(updatedUsers));
-    void persistUsers(updatedUsers).catch((error) => {
-      console.error('No se pudo sincronizar el cambio de contraseña con Supabase.', error);
+    const handleFocus = () => {
+      if (!expireSessionIfNeeded()) {
+        registerActivity();
+      }
+    };
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, handleActivity, { passive: true });
     });
-    
-    const updatedCurrent = { ...currentUser, isFirstLogin: false };
-    setCurrentUser(updatedCurrent);
-    localStorage.setItem('currentUser', JSON.stringify(updatedCurrent));
-  };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, handleActivity);
+      });
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+      window.clearInterval(sessionCheckInterval);
+      clearIdleTimeout();
+    };
+  }, [clearIdleTimeout, currentUser, expireSessionIfNeeded, registerActivity, scheduleIdleLogout]);
 
   return (
-    <AuthContext.Provider value={{ currentUser, login, logout, updatePassword, loading }}>
+    <AuthContext.Provider value={{ currentUser, login, logout, updatePassword, refreshCurrentUser, loading }}>
       {children}
     </AuthContext.Provider>
   );
@@ -167,12 +270,13 @@ export const ProtectedRoute = ({ children }: { children: ReactNode }) => {
 
     if (loading) {
         return (
-          <div className="flex h-screen w-screen items-center justify-center bg-slate-50">
-            <div className="flex flex-col items-center gap-4">
-              <div className="size-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Verificando Seguridad...</span>
-            </div>
-          </div>
+        <div className="relative min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
+          <SystemLoadingOverlay
+            fixed={false}
+            title="Validando acceso..."
+            description="Estamos verificando tu sesión para habilitar el portal."
+          />
+        </div>
         );
     }
 

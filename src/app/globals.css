@@ -1,6 +1,27 @@
+/* ============================================
+   IMPORTAR FUENTE INTER (mejor tipografía profesional)
+   ============================================ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,100..900;1,100..900&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer components {
+  .dialog-btn-secondary {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-800 shadow-sm transition-all duration-200 hover:bg-slate-50;
+  }
+
+  .dialog-btn-primary {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-xl px-6 text-sm font-semibold text-white shadow-sm transition-all duration-200;
+    background-color: #4e93e6;
+    box-shadow: 0 8px 20px rgba(78, 147, 230, 0.22);
+  }
+
+  .dialog-btn-primary:hover {
+    background-color: #4287da;
+  }
+}
 
 @layer base {
   :root {
@@ -74,26 +95,46 @@
   * {
     @apply border-border;
   }
+  
+  /* Configuración mejorada de tipografía con Inter */
   html {
-    font-family: var(--font-sans), sans-serif;
+    /* Inter como fuente principal, con fallbacks profesionales */
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+    font-optical-sizing: auto;
+    font-feature-settings: 'ss03' on, 'ss04' on, 'calt' on;
   }
+  
   body {
-    @apply bg-background text-foreground font-body;
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   }
-  h1,
-  h2,
-  h3,
-  h4,
-  h5,
-  h6,
+  
+  /* Ajuste fino de tracking para títulos con Inter */
+  h1, h2, h3, h4, h5, h6 {
+    letter-spacing: -0.02em;
+    font-weight: 600;
+  }
+  
+  /* Peso óptimo para textos largos */
+  p, li, span, label {
+    letter-spacing: -0.01em;
+  }
+  
+  /* Elementos de formulario heredan Inter correctamente */
   button,
   input,
   textarea,
   select,
   label {
-    font-family: inherit;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+  
+  /* Regla original que mantienes */
+  [class*="uppercase"] {
+    text-transform: capitalize !important;
+    letter-spacing: 0.01em !important;
   }
 }

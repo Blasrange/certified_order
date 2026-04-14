@@ -16,13 +16,21 @@ import type {
   User,
 } from "@/lib/types";
 import type { AppBootstrapData } from "@/lib/app-data-types";
-import { supabaseAdmin } from "@/lib/supabase/admin";
+import {
+  createSupabaseAdminClient,
+  supabaseAdmin,
+  type SupabaseAuditActor,
+} from "@/lib/supabase/admin";
+import { hashPassword, sendUserWelcomeEmail } from "@/lib/password-recovery.server";
 
 const assertNoError = (error: { message: string } | null, context: string) => {
   if (error) {
     throw new Error(`${context}: ${error.message}`);
   }
 };
+
+const resolveDbClient = (actor?: SupabaseAuditActor) =>
+  actor ? createSupabaseAdminClient(actor) : supabaseAdmin;
 
 const pickBusinessOrInternalId = (businessId: unknown, internalId: unknown) =>
   businessId != null && businessId !== "" ? String(businessId) : String(internalId);
@@ -169,24 +177,28 @@ const toUser = (
   accessRows: any[],
   roleCodeById: Map<string, string>,
   ownerCodeById: Map<string, string>
-): User => ({
-  id: user.user_code || String(user.id),
-  name: user.name,
-  email: user.email,
-  avatar: user.avatar_url || "",
-  role: roleCodeById.get(String(user.role_id)) || String(user.role_id),
-  password: user.password_hash || undefined,
-  documentType: user.document_type || undefined,
-  documentNumber: user.document_number || undefined,
-  loginId: user.login_id || undefined,
-  phone: user.phone || undefined,
-  otpMethod: user.otp_method || "email",
-  isActive: user.is_active,
-  isFirstLogin: user.is_first_login,
-  ownerIds: accessRows
-    .filter((access) => access.user_id === user.id)
-    .map((access) => ownerCodeById.get(String(access.owner_id)) || String(access.owner_id)),
-});
+): User => {
+  const resolvedRole = roleCodeById.get(String(user.role_id)) || String(user.role_id);
+
+  return {
+    id: user.user_code || String(user.id),
+    name: user.name,
+    email: user.email,
+    avatar: user.avatar_url || "",
+    role: resolvedRole,
+    isSystemAdmin: String(resolvedRole).trim().toLowerCase() === 'admin',
+    documentType: user.document_type || undefined,
+    documentNumber: user.document_number || undefined,
+    loginId: user.login_id || undefined,
+    phone: user.phone || undefined,
+    otpMethod: user.otp_method || "email",
+    isActive: user.is_active,
+    isFirstLogin: user.is_first_login,
+    ownerIds: accessRows
+      .filter((access) => access.user_id === user.id)
+      .map((access) => ownerCodeById.get(String(access.owner_id)) || String(access.owner_id)),
+  };
+};
 
 const toMaterial = (
   material: any,
@@ -332,6 +344,7 @@ const buildGroupedProcesses = (
 
   return processes.map((process) => ({
     id: pickBusinessOrInternalId(process.process_code, process.id),
+    dbId: String(process.id),
     name: process.name,
     type: process.process_type,
     certificationDate: process.certification_date,
@@ -473,8 +486,10 @@ export const getBootstrapData = async (): Promise<AppBootstrapData> => {
   };
 };
 
-export const syncOwners = async (owners: Owner[]) => {
-  const { data: existingOwners, error: existingOwnersError } = await supabaseAdmin
+export const syncOwners = async (owners: Owner[], actor?: SupabaseAuditActor) => {
+  const db = resolveDbClient(actor);
+
+  const { data: existingOwners, error: existingOwnersError } = await db
     .from("owners")
     .select("id, owner_code, nit");
   assertNoError(existingOwnersError, "Error consultando propietarios existentes");
@@ -487,6 +502,27 @@ export const syncOwners = async (owners: Owner[]) => {
   const existingByNit = new Map(
     (existingOwners || []).map((owner) => [owner.nit, owner])
   );
+
+  const ensureActorOwnerAccess = async (ownerDbId?: string | number) => {
+    if (!actor?.appUserId || ownerDbId == null) {
+      return;
+    }
+
+    const { error: accessError } = await db
+      .from("user_owner_access")
+      .upsert(
+        {
+          user_id: actor.appUserId,
+          owner_id: ownerDbId,
+        },
+        {
+          onConflict: "user_id,owner_id",
+          ignoreDuplicates: true,
+        }
+      );
+
+    assertNoError(accessError, "Error relacionando el propietario con el usuario creador");
+  };
 
   for (const owner of owners) {
     const matchedOwner = existingByCode.get(owner.id) || existingByNit.get(owner.nit);
@@ -502,26 +538,42 @@ export const syncOwners = async (owners: Owner[]) => {
     };
 
     if (matchedOwner) {
-      const { error } = await supabaseAdmin
+      const { error } = await db
         .from("owners")
         .update(payload)
         .eq("id", matchedOwner.id);
       assertNoError(error, "Error sincronizando propietarios");
+      await ensureActorOwnerAccess(matchedOwner.id);
       continue;
     }
 
-    const { error } = await supabaseAdmin.from("owners").insert(payload);
+    const { data: insertedOwners, error } = await db
+      .from("owners")
+      .insert(payload)
+      .select("id, owner_code, nit")
+      .limit(1);
     assertNoError(error, "Error sincronizando propietarios");
+
+    const insertedOwner = insertedOwners?.[0];
+    if (!insertedOwner) {
+      throw new Error(`No se pudo recuperar el id del propietario ${owner.name}.`);
+    }
+
+    existingByCode.set(insertedOwner.owner_code || owner.id, insertedOwner);
+    existingByNit.set(insertedOwner.nit, insertedOwner);
+    await ensureActorOwnerAccess(insertedOwner.id);
   }
 };
 
-export const syncCustomers = async (customers: Customer[]) => {
-  const { data: ownerRows, error: ownerError } = await supabaseAdmin
+export const syncCustomers = async (customers: Customer[], actor?: SupabaseAuditActor) => {
+  const db = resolveDbClient(actor);
+
+  const { data: ownerRows, error: ownerError } = await db
     .from("owners")
     .select("id, owner_code, nit");
   assertNoError(ownerError, "Error consultando propietarios para clientes");
 
-  const { data: existingCustomers, error: existingCustomersError } = await supabaseAdmin
+  const { data: existingCustomers, error: existingCustomersError } = await db
     .from("customers")
     .select("id, customer_code, nit");
   assertNoError(existingCustomersError, "Error consultando clientes existentes");
@@ -542,7 +594,11 @@ export const syncCustomers = async (customers: Customer[]) => {
       throw new Error(`No existe el propietario ${customer.ownerId || ""} para el cliente ${customer.name}.`);
     }
 
-    const matchedCustomer = existingCustomerByCode.get(customer.id) || existingCustomerByNit.get(customer.nit);
+    const originalNit = String(customer.originalNit || "").trim();
+    const matchedCustomer =
+      existingCustomerByCode.get(customer.id) ||
+      (originalNit ? existingCustomerByNit.get(originalNit) : undefined) ||
+      existingCustomerByNit.get(customer.nit);
     const payload = {
       owner_id: ownerId,
       customer_code: matchedCustomer?.customer_code || customer.id,
@@ -555,7 +611,7 @@ export const syncCustomers = async (customers: Customer[]) => {
     };
 
     if (matchedCustomer) {
-      const { error } = await supabaseAdmin
+      const { error } = await db
         .from("customers")
         .update(payload)
         .eq("id", matchedCustomer.id);
@@ -563,23 +619,25 @@ export const syncCustomers = async (customers: Customer[]) => {
       continue;
     }
 
-    const { error } = await supabaseAdmin.from("customers").insert(payload);
+    const { error } = await db.from("customers").insert(payload);
     assertNoError(error, "Error sincronizando clientes");
   }
 };
 
-export const syncStores = async (stores: Store[]) => {
-  const { data: ownerRows, error: ownerError } = await supabaseAdmin
+export const syncStores = async (stores: Store[], actor?: SupabaseAuditActor) => {
+  const db = resolveDbClient(actor);
+
+  const { data: ownerRows, error: ownerError } = await db
     .from("owners")
     .select("id, owner_code");
   assertNoError(ownerError, "Error consultando propietarios para tiendas");
 
-  const { data: customerRows, error: customerError } = await supabaseAdmin
+  const { data: customerRows, error: customerError } = await db
     .from("customers")
     .select("id, nit");
   assertNoError(customerError, "Error consultando clientes para tiendas");
 
-  const { data: existingStores, error: existingStoresError } = await supabaseAdmin
+  const { data: existingStores, error: existingStoresError } = await db
     .from("stores")
     .select("id, store_code");
   assertNoError(existingStoresError, "Error consultando tiendas existentes");
@@ -602,11 +660,15 @@ export const syncStores = async (stores: Store[]) => {
       throw new Error(`No existe el cliente con NIT ${store.customerNit} para la tienda ${store.name}.`);
     }
 
-    const matchedStore = existingStoreByCode.get(store.code) || existingStoreByCode.get(store.id);
+    const originalCode = String(store.originalCode || "").trim();
+    const matchedStore =
+      (originalCode ? existingStoreByCode.get(originalCode) : undefined) ||
+      existingStoreByCode.get(store.code) ||
+      existingStoreByCode.get(store.id);
     const payload = {
       owner_id: ownerId,
       customer_id: customerId,
-      store_code: matchedStore?.store_code || store.code,
+      store_code: store.code,
       name: store.name,
       city: store.city,
       address: store.address,
@@ -615,7 +677,7 @@ export const syncStores = async (stores: Store[]) => {
     };
 
     if (matchedStore) {
-      const { error } = await supabaseAdmin
+      const { error } = await db
         .from("stores")
         .update(payload)
         .eq("id", matchedStore.id);
@@ -623,23 +685,25 @@ export const syncStores = async (stores: Store[]) => {
       continue;
     }
 
-    const { error } = await supabaseAdmin.from("stores").insert(payload);
+    const { error } = await db.from("stores").insert(payload);
     assertNoError(error, "Error sincronizando tiendas");
   }
 };
 
-export const syncMaterials = async (materials: Material[]) => {
-  const { data: ownerRows, error: ownerError } = await supabaseAdmin
+export const syncMaterials = async (materials: Material[], actor?: SupabaseAuditActor) => {
+  const db = resolveDbClient(actor);
+
+  const { data: ownerRows, error: ownerError } = await db
     .from("owners")
     .select("id, owner_code");
   assertNoError(ownerError, "Error consultando propietarios para materiales");
 
-  const { data: customerRows, error: customerError } = await supabaseAdmin
+  const { data: customerRows, error: customerError } = await db
     .from("customers")
     .select("id, nit");
   assertNoError(customerError, "Error consultando clientes para materiales");
 
-  const { data: existingMaterials, error: existingMaterialsError } = await supabaseAdmin
+  const { data: existingMaterials, error: existingMaterialsError } = await db
     .from("materials")
     .select("id, material_code");
   assertNoError(existingMaterialsError, "Error consultando materiales existentes");
@@ -682,7 +746,7 @@ export const syncMaterials = async (materials: Material[]) => {
     };
 
     if (matchedMaterial) {
-      const { error } = await supabaseAdmin
+      const { error } = await db
         .from("materials")
         .update(payload)
         .eq("id", matchedMaterial.id);
@@ -692,7 +756,7 @@ export const syncMaterials = async (materials: Material[]) => {
       continue;
     }
 
-    const { data: insertedMaterials, error: insertError } = await supabaseAdmin
+    const { data: insertedMaterials, error: insertError } = await db
       .from("materials")
       .insert(payload)
       .select("id")
@@ -710,7 +774,7 @@ export const syncMaterials = async (materials: Material[]) => {
 
   const materialDbIds = syncedMaterials.map((material) => material.dbId);
   if (materialDbIds.length > 0) {
-    const { error: deleteUomsError } = await supabaseAdmin
+    const { error: deleteUomsError } = await db
       .from("material_uoms")
       .delete()
       .in("material_id", materialDbIds);
@@ -731,15 +795,17 @@ export const syncMaterials = async (materials: Material[]) => {
   }).filter((uom) => uom.material_id != null);
 
   if (uomRows.length > 0) {
-    const { error: uomError } = await supabaseAdmin
+    const { error: uomError } = await db
       .from("material_uoms")
       .insert(uomRows);
     assertNoError(uomError, "Error sincronizando UOMs");
   }
 };
 
-export const syncMappingProfiles = async (profiles: MappingProfile[]) => {
-  const { data: existingProfiles, error: existingProfilesError } = await supabaseAdmin
+export const syncMappingProfiles = async (profiles: MappingProfile[], actor?: SupabaseAuditActor) => {
+  const db = resolveDbClient(actor);
+
+  const { data: existingProfiles, error: existingProfilesError } = await db
     .from("mapping_profiles")
     .select("id, profile_code, name");
   assertNoError(existingProfilesError, "Error consultando homologaciones existentes");
@@ -771,7 +837,7 @@ export const syncMappingProfiles = async (profiles: MappingProfile[]) => {
     };
 
     if (matchedProfile) {
-      const { error } = await supabaseAdmin
+      const { error } = await db
         .from("mapping_profiles")
         .update(payload)
         .eq("id", matchedProfile.id);
@@ -779,13 +845,15 @@ export const syncMappingProfiles = async (profiles: MappingProfile[]) => {
       continue;
     }
 
-    const { error } = await supabaseAdmin.from("mapping_profiles").insert(payload);
+    const { error } = await db.from("mapping_profiles").insert(payload);
     assertNoError(error, "Error sincronizando homologaciones");
   }
 };
 
-export const syncRoles = async (roles: AppRole[]) => {
-  const { data: existingRoles, error: existingRolesError } = await supabaseAdmin
+export const syncRoles = async (roles: AppRole[], actor?: SupabaseAuditActor) => {
+  const db = resolveDbClient(actor);
+
+  const { data: existingRoles, error: existingRolesError } = await db
     .from("app_roles")
     .select("id, role_code");
   assertNoError(existingRolesError, "Error consultando roles existentes");
@@ -805,7 +873,7 @@ export const syncRoles = async (roles: AppRole[]) => {
     };
 
     if (matchedRole) {
-      const { error } = await supabaseAdmin
+      const { error } = await db
         .from("app_roles")
         .update(payload)
         .eq("id", matchedRole.id);
@@ -814,7 +882,7 @@ export const syncRoles = async (roles: AppRole[]) => {
       continue;
     }
 
-    const { data: insertedRoles, error: insertRoleError } = await supabaseAdmin
+    const { data: insertedRoles, error: insertRoleError } = await db
       .from("app_roles")
       .insert(payload)
       .select("id")
@@ -831,7 +899,7 @@ export const syncRoles = async (roles: AppRole[]) => {
 
   const roleDbIds = syncedRoles.map((role) => role.dbId);
   if (roleDbIds.length > 0) {
-    const { error: deletePermissionsError } = await supabaseAdmin
+    const { error: deletePermissionsError } = await db
       .from("role_module_permissions")
       .delete()
       .in("role_id", roleDbIds);
@@ -858,25 +926,27 @@ export const syncRoles = async (roles: AppRole[]) => {
   ).filter((permission) => permission.role_id != null);
 
   if (permissionRows.length > 0) {
-    const { error: permissionError } = await supabaseAdmin
+    const { error: permissionError } = await db
       .from("role_module_permissions")
       .insert(permissionRows);
     assertNoError(permissionError, "Error sincronizando permisos por modulo");
   }
 };
 
-export const syncUsers = async (users: User[]) => {
-  const { data: roles, error: rolesError } = await supabaseAdmin
+export const syncUsers = async (users: User[], actor?: SupabaseAuditActor) => {
+  const db = resolveDbClient(actor);
+
+  const { data: roles, error: rolesError } = await db
     .from("app_roles")
     .select("id, role_code");
   assertNoError(rolesError, "Error consultando roles para usuarios");
 
-  const { data: owners, error: ownersError } = await supabaseAdmin
+  const { data: owners, error: ownersError } = await db
     .from("owners")
     .select("id, owner_code");
   assertNoError(ownersError, "Error consultando propietarios para usuarios");
 
-  const { data: existingUsers, error: existingUsersError } = await supabaseAdmin
+  const { data: existingUsers, error: existingUsersError } = await db
     .from("app_users")
     .select("id, user_code, login_id, document_number, email");
   assertNoError(existingUsersError, "Error consultando usuarios existentes");
@@ -904,6 +974,8 @@ export const syncUsers = async (users: User[]) => {
       .map((user) => [user.email, user])
   );
 
+  const requiredAccessByFrontendUserId = new Map<string, number>();
+
   const syncedUsers: Array<{ frontendId: string; dbId: string | number }> = [];
 
   for (const user of users) {
@@ -918,13 +990,16 @@ export const syncUsers = async (users: User[]) => {
       (user.documentNumber ? existingUserByDocument.get(user.documentNumber) : undefined) ||
       existingUserByEmail.get(user.email);
 
+    const normalizedPassword = String(user.password || '').trim();
+    const passwordHash = normalizedPassword ? await hashPassword(normalizedPassword) : null;
+
     const payload = {
       user_code: matchedUser?.user_code || user.id,
       role_id: roleId,
       name: user.name,
       email: user.email,
       avatar_url: user.avatar || null,
-      password_hash: user.password || null,
+      password_hash: passwordHash,
       document_type: user.documentType || null,
       document_number: user.documentNumber || null,
       login_id: user.loginId || null,
@@ -935,18 +1010,30 @@ export const syncUsers = async (users: User[]) => {
     };
 
     if (matchedUser) {
-      const { error: userError } = await supabaseAdmin
+      const updatePayload = {
+        ...payload,
+        password_hash: passwordHash ?? undefined,
+      };
+
+      const { error: userError } = await db
         .from("app_users")
-        .update(payload)
+        .update(updatePayload)
         .eq("id", matchedUser.id);
       assertNoError(userError, "Error sincronizando usuarios");
       syncedUsers.push({ frontendId: user.id, dbId: matchedUser.id });
       continue;
     }
 
-    const { data: insertedUsers, error: insertUserError } = await supabaseAdmin
+    const temporaryPassword = normalizedPassword || `${user.loginId || user.email.split('@')[0]}#${Math.floor(1000 + Math.random() * 9000)}`;
+    const temporaryPasswordHash = await hashPassword(temporaryPassword);
+    const insertPayload = {
+      ...payload,
+      password_hash: temporaryPasswordHash,
+    };
+
+    const { data: insertedUsers, error: insertUserError } = await db
       .from("app_users")
-      .insert(payload)
+      .insert(insertPayload)
       .select("id")
       .limit(1);
     assertNoError(insertUserError, "Error sincronizando usuarios");
@@ -957,11 +1044,23 @@ export const syncUsers = async (users: User[]) => {
     }
 
     syncedUsers.push({ frontendId: user.id, dbId: insertedUser.id });
+
+    if (user.email && user.loginId) {
+      const loginUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.APP_URL?.trim() || 'http://localhost:3000/login';
+      await sendUserWelcomeEmail({
+        userId: insertedUser.id,
+        to: user.email,
+        name: user.name,
+        loginId: user.loginId,
+        temporaryPassword,
+        loginUrl,
+      });
+    }
   }
 
   const syncedDbUserIds = syncedUsers.map((user) => user.dbId);
   if (syncedDbUserIds.length > 0) {
-    const { error: deleteAccessError } = await supabaseAdmin
+    const { error: deleteAccessError } = await db
       .from("user_owner_access")
       .delete()
       .in("user_id", syncedDbUserIds);
@@ -971,33 +1070,107 @@ export const syncUsers = async (users: User[]) => {
   const dbUserIdByFrontendId = new Map(
     syncedUsers.map((user) => [user.frontendId, user.dbId])
   );
-  const accessRows = users.flatMap((user) =>
-    (user.ownerIds || [])
-      .map((ownerId) => {
-        const dbUserId = dbUserIdByFrontendId.get(user.id);
-        const dbOwnerId = ownerRowsByKey.get(ownerId)?.id;
+  const accessRows = Array.from(
+    new Map(
+      users.flatMap((user) => {
+        const uniqueOwnerIds = Array.from(new Set(user.ownerIds || []));
+        requiredAccessByFrontendUserId.set(user.id, uniqueOwnerIds.length);
 
-        if (!dbUserId || !dbOwnerId) {
-          return null;
+        const unresolvedOwnerIds = uniqueOwnerIds.filter((ownerId) => !ownerRowsByKey.get(ownerId));
+        if (unresolvedOwnerIds.length > 0) {
+          throw new Error(
+            `No se encontraron en la base de datos los propietarios seleccionados para ${user.name}: ${unresolvedOwnerIds.join(', ')}`
+          );
         }
 
-        return {
-          user_id: dbUserId,
-          owner_id: dbOwnerId,
-        };
-      })
-      .filter(Boolean)
+        return uniqueOwnerIds
+          .map((ownerId) => {
+            const dbUserId = dbUserIdByFrontendId.get(user.id);
+            const dbOwnerId = ownerRowsByKey.get(ownerId)?.id;
+
+            if (!dbUserId || !dbOwnerId) {
+              return null;
+            }
+
+            return {
+              key: `${String(dbUserId)}:${String(dbOwnerId)}`,
+              value: {
+                user_id: dbUserId,
+                owner_id: dbOwnerId,
+              },
+            };
+          })
+          .filter(Boolean) as Array<{
+            key: string;
+            value: { user_id: string | number; owner_id: string | number };
+          }>;
+      }).map((row) => [row.key, row.value])
+    ).values()
   );
 
   if (accessRows.length > 0) {
-    const { error: accessError } = await supabaseAdmin
+    const { error: accessError } = await db
       .from("user_owner_access")
-      .insert(accessRows as Array<{ user_id: string | number; owner_id: string | number }>);
+      .upsert(accessRows, {
+        onConflict: "user_id,owner_id",
+        ignoreDuplicates: true,
+      });
     assertNoError(accessError, "Error sincronizando accesos por propietario");
+  }
+
+  const syncedDbIds = syncedUsers.map((user) => user.dbId);
+  if (syncedDbIds.length > 0) {
+    const { data: verifiedUsers, error: verifyUsersError } = await db
+      .from("app_users")
+      .select("id, user_code")
+      .in("id", syncedDbIds);
+    assertNoError(verifyUsersError, "Error validando usuarios sincronizados");
+
+    const verifiedUserById = new Map((verifiedUsers || []).map((user) => [String(user.id), user]));
+    const dbIdByFrontendUserId = new Map(syncedUsers.map((user) => [user.frontendId, String(user.dbId)]));
+
+    for (const user of users) {
+      const dbId = dbIdByFrontendUserId.get(user.id);
+
+      if (!dbId || !verifiedUserById.has(dbId)) {
+        throw new Error(`El usuario ${user.name} no quedó registrado en app_users.`);
+      }
+    }
+
+    const dbIdsToVerify = Array.from(verifiedUserById.values()).map((user) => user.id);
+    const { data: verifiedAccessRows, error: verifyAccessError } = await db
+      .from("user_owner_access")
+      .select("user_id, owner_id")
+      .in("user_id", dbIdsToVerify);
+    assertNoError(verifyAccessError, "Error validando accesos por propietario");
+
+    const accessCountByDbUserId = new Map<string, number>();
+    (verifiedAccessRows || []).forEach((row) => {
+      const key = String(row.user_id);
+      accessCountByDbUserId.set(key, (accessCountByDbUserId.get(key) || 0) + 1);
+    });
+
+    for (const user of users) {
+      const dbId = dbIdByFrontendUserId.get(user.id);
+      const verifiedUser = dbId ? verifiedUserById.get(dbId) : undefined;
+      if (!verifiedUser) {
+        continue;
+      }
+
+      const expectedAccessCount = requiredAccessByFrontendUserId.get(user.id) || 0;
+      const actualAccessCount = accessCountByDbUserId.get(String(verifiedUser.id)) || 0;
+
+      if (expectedAccessCount > 0 && actualAccessCount < expectedAccessCount) {
+        throw new Error(
+          `El usuario ${user.name} no quedó relacionado correctamente en user_owner_access. Esperados: ${expectedAccessCount}, insertados: ${actualAccessCount}.`
+        );
+      }
+    }
   }
 };
 
-export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => {
+export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], actor?: SupabaseAuditActor) => {
+  const db = resolveDbClient(actor);
   const currentCodes = groupedProcesses.map((process) => process.id);
   const [
     existingProcessesResult,
@@ -1007,12 +1180,12 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
     storesResult,
     materialsResult,
   ] = await Promise.all([
-    supabaseAdmin.from("certification_processes").select("id, process_code"),
-    supabaseAdmin.from("owners").select("id, owner_code"),
-    supabaseAdmin.from("app_users").select("id, user_code"),
-    supabaseAdmin.from("customers").select("id, nit"),
-    supabaseAdmin.from("stores").select("id, store_code"),
-    supabaseAdmin.from("materials").select("id, material_code"),
+    db.from("certification_processes").select("id, process_code"),
+    db.from("owners").select("id, owner_code"),
+    db.from("app_users").select("id, user_code"),
+    db.from("customers").select("id, nit"),
+    db.from("stores").select("id, store_code"),
+    db.from("materials").select("id, material_code"),
   ]);
   const { data: existingProcesses, error: existingError } = existingProcessesResult;
   assertNoError(existingError, "Error consultando procesos existentes");
@@ -1027,7 +1200,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
     .map((process) => process.id);
 
   if (idsToDelete.length > 0) {
-    const { error: deleteError } = await supabaseAdmin
+    const { error: deleteError } = await db
       .from("certification_processes")
       .delete()
       .in("id", idsToDelete);
@@ -1066,7 +1239,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
     };
 
     if (matchedProcess) {
-      const { error: processError } = await supabaseAdmin
+      const { error: processError } = await db
         .from("certification_processes")
         .update(payload)
         .eq("id", matchedProcess.id);
@@ -1075,7 +1248,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
       continue;
     }
 
-    const { data: insertedProcesses, error: insertProcessError } = await supabaseAdmin
+    const { data: insertedProcesses, error: insertProcessError } = await db
       .from("certification_processes")
       .insert(payload)
       .select("id")
@@ -1092,7 +1265,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
 
   const processDbIds = syncedProcesses.map((process) => process.dbId);
   if (processDbIds.length > 0) {
-    const { error: deleteOrdersError } = await supabaseAdmin
+    const { error: deleteOrdersError } = await db
       .from("process_orders")
       .delete()
       .in("process_id", processDbIds);
@@ -1128,7 +1301,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
 
   const dbOrderIdByFrontendKey = new Map<string, string | number>();
   for (const row of orderRows) {
-    const { data: insertedOrders, error: orderError } = await supabaseAdmin
+    const { data: insertedOrders, error: orderError } = await db
       .from("process_orders")
       .insert(row.payload)
       .select("id")
@@ -1161,7 +1334,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
   ).filter(Boolean);
 
   if (assignmentRows.length > 0) {
-    const { error: assignmentError } = await supabaseAdmin
+    const { error: assignmentError } = await db
       .from("order_assignments")
       .insert(assignmentRows as Array<{ order_id: string | number; user_id: string | number }>);
     assertNoError(assignmentError, "Error insertando asignaciones de pedidos");
@@ -1194,7 +1367,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
   ).filter(Boolean);
 
   if (itemRows.length > 0) {
-    const { error: itemError } = await supabaseAdmin
+    const { error: itemError } = await db
       .from("order_items")
       .insert(itemRows as Array<Record<string, unknown>>);
     assertNoError(itemError, "Error insertando items de pedidos");
@@ -1223,7 +1396,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
 
   const dbBoxIdByFrontendKey = new Map<string, string | number>();
   for (const row of boxRows) {
-    const { data: insertedBoxes, error: boxError } = await supabaseAdmin
+    const { data: insertedBoxes, error: boxError } = await db
       .from("order_boxes")
       .insert(row.payload)
       .select("id")
@@ -1261,9 +1434,18 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[]) => 
   ).filter(Boolean);
 
   if (boxItemRows.length > 0) {
-    const { error: boxItemError } = await supabaseAdmin
+    const { error: boxItemError } = await db
       .from("order_box_items")
       .insert(boxItemRows as Array<Record<string, unknown>>);
     assertNoError(boxItemError, "Error insertando items por caja");
   }
+
+  const syncedProcessMap = new Map(
+    syncedProcesses.map((process) => [process.frontendId, String(process.dbId)])
+  );
+
+  return groupedProcesses.map((process) => ({
+    ...process,
+    dbId: syncedProcessMap.get(process.id) || process.dbId,
+  }));
 };
