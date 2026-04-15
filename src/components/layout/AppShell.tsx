@@ -5,6 +5,7 @@
 import * as React from "react";
 import {
   LayoutDashboard,
+  TimerReset,
   ClipboardCheck,
   Users2,
   Package,
@@ -53,13 +54,14 @@ export default function AppShell({
   selectedProcessName = "",
   onOrdersViewChange 
 }: AppShellProps) {
-  const { currentUser, logout } = useAuth();
+  const { currentUser, logout, lastActivityAt, idleTimeoutMs } = useAuth();
   const appData = useFilteredAppData(currentUser);
   const router = useRouter();
   const pathname = usePathname();
   const [userPermissions, setUserPermissions] = React.useState<string[]>([]);
   const [isNavigating, setIsNavigating] = React.useState(false);
   const [pendingView, setPendingView] = React.useState<View | null>(null);
+  const [activityClock, setActivityClock] = React.useState(() => Date.now());
   
   const activeView = React.useMemo(() => {
     const view = pathname.split("/")[1];
@@ -98,7 +100,46 @@ export default function AppShell({
     setPendingView(null);
   }, [pathname]);
 
-  if (!currentUser) return null;
+  React.useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setActivityClock(Date.now());
+    }, 1_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [currentUser]);
+
+  if (!currentUser) {
+    return <ProtectedRoute>{null}</ProtectedRoute>;
+  }
+
+  const elapsedMinutes = lastActivityAt ? Math.max(0, Math.floor((activityClock - lastActivityAt) / 60_000)) : null;
+  const remainingMs = lastActivityAt ? Math.max(0, idleTimeoutMs - (activityClock - lastActivityAt)) : null;
+  const remainingMinutes = remainingMs === null ? null : Math.ceil(remainingMs / 60_000);
+  const remainingSeconds = remainingMs === null ? null : Math.floor(remainingMs / 1_000);
+  const lastActivityLabel = elapsedMinutes === null
+    ? 'Sin actividad registrada'
+    : elapsedMinutes <= 0
+      ? 'Última actividad: ahora'
+      : `Última actividad: hace ${elapsedMinutes} min`;
+  const countdownLabel = remainingSeconds === null
+    ? '--:--'
+    : `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(remainingSeconds % 60).padStart(2, '0')}`;
+  const sessionLabel = remainingMinutes === null
+    ? 'Sesión pendiente'
+    : remainingMinutes <= 1
+      ? 'Sesión vence en menos de 1 min'
+      : `Sesión vence en ${remainingMinutes} min`;
+  const countdownTone = remainingSeconds !== null && remainingSeconds <= 60
+    ? 'text-red-600 bg-red-50 border-red-100'
+    : remainingSeconds !== null && remainingSeconds <= 300
+      ? 'text-amber-600 bg-amber-50 border-amber-100'
+      : 'text-primary bg-slate-50 border-slate-200';
 
   const hasAccess = (moduleId: string) => userPermissions.includes(moduleId);
 
@@ -183,6 +224,12 @@ export default function AppShell({
           <SystemLoadingOverlay
             title={getLoadingLabel()}
             description="Estamos preparando la vista seleccionada."
+          />
+        )}
+        {appData.loading && (
+          <SystemLoadingOverlay
+            title="Cargando página..."
+            description={`Estamos preparando ${getPageTitle().toLowerCase()} y sincronizando la información necesaria.`}
           />
         )}
         {/* Top Navigation Bar - Mejorado con Inter */}
@@ -367,6 +414,19 @@ export default function AppShell({
             </div>
 
             <div className="flex items-center gap-4">
+              <div className={cn(
+                "hidden xl:flex items-center gap-1.5 rounded-full border px-2 py-1 shadow-sm transition-colors",
+                countdownTone,
+              )}>
+                <div className="flex size-5 items-center justify-center rounded-full bg-white/80">
+                  <TimerReset className="size-3" />
+                </div>
+                <div className="flex flex-col leading-none gap-0.5">
+                  <span className="text-[8px] font-semibold uppercase tracking-wider opacity-70">Sesión</span>
+                  <span className="font-mono text-[12px] font-bold tracking-tight whitespace-nowrap">{countdownLabel}</span>
+                </div>
+              </div>
+
               <div className="hidden lg:flex flex-col items-end">
                 <span className="text-sm font-semibold text-slate-700 leading-tight">{currentUser.name}</span>
                 <span className="text-xs text-slate-400">{currentUser.email}</span>
@@ -395,6 +455,17 @@ export default function AppShell({
                       <span className="text-sm font-semibold text-slate-900 leading-tight">{currentUser.name}</span>
                       <span className="text-xs text-slate-400 mt-0.5 truncate max-w-[160px]">{currentUser.email}</span>
                     </div>
+                  </div>
+                  <div className="mx-2 mb-1 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Sesión</p>
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold text-slate-700">{lastActivityLabel}</p>
+                      <p className={cn(
+                        "font-mono text-[11px] font-bold whitespace-nowrap rounded-md border px-2 py-1",
+                        countdownTone,
+                      )}>{countdownLabel}</p>
+                    </div>
+                    <p className="mt-1 text-[10px] font-semibold text-slate-500">{sessionLabel}</p>
                   </div>
                   <DropdownMenuSeparator className="my-1" />
                   <DropdownMenuItem 

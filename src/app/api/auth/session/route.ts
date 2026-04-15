@@ -17,7 +17,7 @@ export async function GET() {
   const user = await getSessionUser(sessionCookie);
 
   if (!user) {
-    return clearSessionCookie(NextResponse.json({ user: null }, { status: 401 }));
+    return clearSessionCookie(NextResponse.json({ ok: true, user: null }));
   }
 
   return attachSessionCookie(NextResponse.json({ ok: true, user }), user.loginId || '');

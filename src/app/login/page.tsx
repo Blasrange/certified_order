@@ -47,8 +47,15 @@ export default function LoginPage() {
     }
 
     const logoutReason = searchParams.get('reason');
-    if (logoutReason !== 'idle-timeout') {
+    const storedLogoutReason = window.sessionStorage.getItem(LOGOUT_REASON_KEY);
+    const resolvedReason = logoutReason || storedLogoutReason;
+
+    if (resolvedReason !== 'idle-timeout') {
       return;
+    }
+
+    if (storedLogoutReason) {
+      window.sessionStorage.removeItem(LOGOUT_REASON_KEY);
     }
 
     const timeoutId = window.setTimeout(() => {

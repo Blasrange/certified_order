@@ -6,25 +6,33 @@ import { useRouter } from 'next/navigation';
 import { AppLogo } from '@/components/icons';
 import { SystemLoadingOverlay } from '@/components/ui/system-loading-overlay';
 
+const LOGOUT_REASON_KEY = 'auth:logoutReason';
+
 interface AuthContextType {
   currentUser: User | null;
   login: (username: string, password: string) => Promise<User>;
   logout: () => void;
   updatePassword: (newPassword: string) => Promise<void>;
-  refreshCurrentUser: () => Promise<User | null>;
+  refreshCurrentUser: (options?: { preserveActivity?: boolean }) => Promise<User | null>;
   loading: boolean;
+  lastActivityAt: number | null;
+  idleTimeoutMs: number;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 const SESSION_CHECK_INTERVAL_MS = 30 * 1000;
+const SESSION_KEEP_ALIVE_MS = 5 * 60 * 1000;
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
   const idleTimeoutRef = useRef<number | null>(null);
   const lastActivityAtRef = useRef<number>(Date.now());
+  const lastSessionSyncAtRef = useRef<number>(0);
+  const keepAliveInFlightRef = useRef(false);
 
   const clearIdleTimeout = useCallback(() => {
     if (idleTimeoutRef.current !== null && typeof window !== 'undefined') {
@@ -36,6 +44,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const performLogout = useCallback(async (reason?: 'idle-timeout') => {
     clearIdleTimeout();
     setCurrentUser(null);
+    setLastActivityAt(null);
+    lastSessionSyncAtRef.current = 0;
 
     try {
       await fetch('/api/auth/session', { method: 'DELETE' });
@@ -44,7 +54,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     if (reason && typeof window !== 'undefined' && window.location.pathname !== '/login') {
-      window.location.assign('/login?reason=idle-timeout');
+      window.sessionStorage.setItem(LOGOUT_REASON_KEY, reason);
+      window.location.assign('/login');
     }
   }, [clearIdleTimeout]);
 
@@ -95,27 +106,60 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     const now = Date.now();
     lastActivityAtRef.current = now;
+    setLastActivityAt(now);
     scheduleIdleLogout(now);
   }, [currentUser, scheduleIdleLogout]);
 
-  const refreshCurrentUser = useCallback(async () => {
+  const refreshCurrentUser = useCallback(async (options?: { preserveActivity?: boolean }) => {
     try {
       const response = await fetch('/api/auth/session', { cache: 'no-store' });
       const payload = (await response.json().catch(() => null)) as { user?: User | null } | null;
 
       if (response.ok && payload?.user) {
         setCurrentUser(payload.user);
-        lastActivityAtRef.current = Date.now();
+        const now = Date.now();
+        if (!options?.preserveActivity) {
+          lastActivityAtRef.current = now;
+          setLastActivityAt(now);
+        }
+        lastSessionSyncAtRef.current = now;
         return payload.user;
       }
 
       setCurrentUser(null);
+      setLastActivityAt(null);
       return null;
     } catch (error) {
       console.error('No se pudo refrescar la sesión actual.', error);
       return null;
     }
   }, []);
+
+  const syncSessionIfNeeded = useCallback(async () => {
+    if (typeof window === 'undefined' || !currentUser || keepAliveInFlightRef.current) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastActivityAtRef.current >= IDLE_TIMEOUT_MS) {
+      return;
+    }
+
+    if (now - lastSessionSyncAtRef.current < SESSION_KEEP_ALIVE_MS) {
+      return;
+    }
+
+    if (lastActivityAtRef.current <= lastSessionSyncAtRef.current) {
+      return;
+    }
+
+    keepAliveInFlightRef.current = true;
+    try {
+      await refreshCurrentUser({ preserveActivity: true });
+    } finally {
+      keepAliveInFlightRef.current = false;
+    }
+  }, [currentUser, refreshCurrentUser]);
 
   useEffect(() => {
     const initializeAuth = async () => {
@@ -153,7 +197,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     setCurrentUser(payload.user);
-    lastActivityAtRef.current = Date.now();
+    const now = Date.now();
+    lastActivityAtRef.current = now;
+    lastSessionSyncAtRef.current = now;
+    setLastActivityAt(now);
     return payload.user;
   };
 
@@ -181,7 +228,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     setCurrentUser(payload.user);
-    lastActivityAtRef.current = Date.now();
+    const now = Date.now();
+    lastActivityAtRef.current = now;
+    lastSessionSyncAtRef.current = now;
+    setLastActivityAt(now);
   };
 
   useEffect(() => {
@@ -196,12 +246,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     scheduleIdleLogout(lastActivityAtRef.current || Date.now());
     const sessionCheckInterval = window.setInterval(() => {
-      expireSessionIfNeeded();
+      if (!expireSessionIfNeeded()) {
+        void syncSessionIfNeeded();
+      }
     }, SESSION_CHECK_INTERVAL_MS);
 
     const activityEvents: Array<keyof WindowEventMap> = [
       'mousedown',
-      'mousemove',
       'keydown',
       'scroll',
       'touchstart',
@@ -216,6 +267,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (!document.hidden) {
         if (!expireSessionIfNeeded()) {
           registerActivity();
+          void syncSessionIfNeeded();
         }
       }
     };
@@ -223,6 +275,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const handleFocus = () => {
       if (!expireSessionIfNeeded()) {
         registerActivity();
+        void syncSessionIfNeeded();
       }
     };
 
@@ -241,10 +294,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       window.clearInterval(sessionCheckInterval);
       clearIdleTimeout();
     };
-  }, [clearIdleTimeout, currentUser, expireSessionIfNeeded, registerActivity, scheduleIdleLogout]);
+  }, [clearIdleTimeout, currentUser, expireSessionIfNeeded, registerActivity, scheduleIdleLogout, syncSessionIfNeeded]);
 
   return (
-    <AuthContext.Provider value={{ currentUser, login, logout, updatePassword, refreshCurrentUser, loading }}>
+    <AuthContext.Provider value={{ currentUser, login, logout, updatePassword, refreshCurrentUser, loading, lastActivityAt, idleTimeoutMs: IDLE_TIMEOUT_MS }}>
       {children}
     </AuthContext.Provider>
   );
@@ -262,25 +315,25 @@ export const ProtectedRoute = ({ children }: { children: ReactNode }) => {
     const { currentUser, loading } = useAuth();
     const router = useRouter();
 
+  const shouldRedirect = !loading && !currentUser;
+
     useEffect(() => {
-        if (!loading && !currentUser) {
+    if (shouldRedirect) {
             router.replace('/login');
         }
-    }, [currentUser, loading, router]);
+  }, [router, shouldRedirect]);
 
-    if (loading) {
+  if (loading || shouldRedirect) {
         return (
         <div className="relative min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
           <SystemLoadingOverlay
             fixed={false}
-            title="Validando acceso..."
-            description="Estamos verificando tu sesión para habilitar el portal."
+      title={loading ? "Validando acceso..." : "Redirigiendo al inicio de sesión..."}
+      description={loading ? "Estamos verificando tu sesión para habilitar el portal." : "No hay una sesión activa. Estamos enviándote al acceso seguro."}
           />
         </div>
         );
     }
-
-    if (!currentUser) return null;
 
     return <>{children}</>;
 };
