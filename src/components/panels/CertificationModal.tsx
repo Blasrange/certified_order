@@ -4,6 +4,8 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -24,6 +26,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { 
   ScanBarcode, 
   PauseCircle, 
@@ -41,13 +44,14 @@ import {
   Lock,
   ArrowRightCircle,
   Info,
-  Zap,
+  PencilLine,
+  Eye,
+  Search,
 } from "lucide-react";
 import type { OrderGroup, Material, OrderBox, OrderItem } from "@/lib/types";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { mockMaterials } from "@/lib/data";
@@ -73,6 +77,10 @@ interface GroupedSKUItem {
   lots: OrderItem[];
 }
 
+type FinalizeStatus = 'verified' | 'partial';
+
+const normalizeBatchValue = (value: string | undefined | null) => String(value || "").trim().toLowerCase();
+
 const CertificationModal: React.FC<CertificationModalProps> = ({ 
   orderGroup, 
   isOpen, 
@@ -85,17 +93,52 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [barcodeInput, setBarcodeInput] = useState("");
+  const [skuSearchTerm, setSkuSearchTerm] = useState("");
   const [activeBoxIndex, setActiveBoxIndex] = useState(1);
-  const [isManualMode, setIsManualMode] = useState(false);
-  const [isAutoMode, setIsAutoMode] = useState(true);
+  const [batchInputs, setBatchInputs] = useState<Record<string, string>>({});
+  const [isSignatureOpen, setIsSignatureOpen] = useState(false);
+  const [pendingFinalizeStatus, setPendingFinalizeStatus] = useState<FinalizeStatus | null>(null);
+  const [signatureSignerName, setSignatureSignerName] = useState("");
+  const [isSignatureDirty, setIsSignatureDirty] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const signatureCanvasRef = useRef<HTMLCanvasElement>(null);
+  const isDrawingSignatureRef = useRef(false);
   const isFinalized = orderGroup?.isFinalized || false;
+  const parentProcessMode = useMemo(() => {
+    if (!orderGroup) {
+      return 'automatic-quantity' as const;
+    }
+
+    const parentProcess = appData.groupedProcesses.find((process) =>
+      process.orders.some((order) => order.id === orderGroup.id && order.orderNumber === orderGroup.orderNumber)
+    );
+
+    if (parentProcess?.operationMode === 'manual') {
+      return 'manual' as const;
+    }
+
+    if (parentProcess?.operationMode === 'automatic-blind') {
+      return 'automatic-blind' as const;
+    }
+
+    return 'automatic-quantity' as const;
+  }, [appData.groupedProcesses, orderGroup]);
+  const isManualMode = parentProcessMode === 'manual';
+  const isAutomaticBlindMode = parentProcessMode === 'automatic-blind';
+  const isAutomaticQuantityMode = parentProcessMode === 'automatic-quantity';
+  const isAutoMode = !isManualMode;
 
   useEffect(() => {
     if (isOpen && orderGroup?.id) {
-      setIsManualMode(false);
-      setIsAutoMode(true);
+      setBatchInputs(
+        orderGroup.items.reduce<Record<string, string>>((acc, item) => {
+          if (!acc[item.productCode] && item.enteredBatch) {
+            acc[item.productCode] = item.enteredBatch;
+          }
+          return acc;
+        }, {})
+      );
       
       setCurrentPage(1);
       setBarcodeInput("");
@@ -107,16 +150,11 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
       }
       setTimeout(() => inputRef.current?.focus(), 200);
     }
-  }, [isOpen, orderGroup?.id]);
+  }, [isOpen, orderGroup?.id, orderGroup?.items]);
 
-  const handleToggleManual = (val: boolean) => {
-    setIsManualMode(val);
-    if (!val) setTimeout(() => inputRef.current?.focus(), 100);
-  };
-
-  const handleToggleAuto = (val: boolean) => {
-    setIsAutoMode(val);
-  };
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [skuSearchTerm]);
 
   const groupedItems = useMemo(() => {
     if (!orderGroup) return [];
@@ -148,6 +186,116 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
       return g;
     });
   }, [orderGroup]);
+
+  const getBatchValidationState = (group: GroupedSKUItem) => {
+    const enteredBatch = batchInputs[group.productCode] ?? group.lots.find((lot) => lot.enteredBatch)?.enteredBatch ?? "";
+    const normalizedEnteredBatch = normalizeBatchValue(enteredBatch);
+    const hasMatch = normalizedEnteredBatch !== "" && group.lots.some((lot) => normalizeBatchValue(lot.batch) === normalizedEnteredBatch);
+    const status: 'pending' | 'matched' | 'mismatch' = normalizedEnteredBatch === "" ? 'pending' : hasMatch ? 'matched' : 'mismatch';
+
+    return {
+      enteredBatch,
+      status,
+      hasMatch,
+    };
+  };
+
+  const resizeSignatureCanvas = React.useCallback(() => {
+    const canvas = signatureCanvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * devicePixelRatio;
+    canvas.height = rect.height * devicePixelRatio;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    context.scale(devicePixelRatio, devicePixelRatio);
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.lineWidth = 2.25;
+    context.strokeStyle = '#1e293b';
+    context.clearRect(0, 0, rect.width, rect.height);
+  }, []);
+
+  useEffect(() => {
+    if (!isSignatureOpen) {
+      return;
+    }
+
+    setSignatureSignerName(currentUser?.name || "");
+    setIsSignatureDirty(false);
+    const rafId = window.requestAnimationFrame(() => {
+      resizeSignatureCanvas();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [currentUser?.name, isSignatureOpen, resizeSignatureCanvas]);
+
+  const getCanvasPoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = signatureCanvasRef.current;
+    if (!canvas) {
+      return { x: 0, y: 0 };
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    };
+  };
+
+  const handleSignaturePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = signatureCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) {
+      return;
+    }
+
+    const { x, y } = getCanvasPoint(event);
+    isDrawingSignatureRef.current = true;
+    canvas.setPointerCapture(event.pointerId);
+    context.beginPath();
+    context.moveTo(x, y);
+  };
+
+  const handleSignaturePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isDrawingSignatureRef.current) {
+      return;
+    }
+
+    const canvas = signatureCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) {
+      return;
+    }
+
+    const { x, y } = getCanvasPoint(event);
+    context.lineTo(x, y);
+    context.stroke();
+    setIsSignatureDirty(true);
+  };
+
+  const handleSignaturePointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = signatureCanvasRef.current;
+    if (canvas?.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
+    isDrawingSignatureRef.current = false;
+  };
+
+  const clearSignature = () => {
+    resizeSignatureCanvas();
+    setIsSignatureDirty(false);
+  };
 
   if (!orderGroup) return null;
 
@@ -413,22 +561,121 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
     toast({ title: "Producto retirado del empaque", description: `El SKU ${productCode} fue retirado correctamente de la caja ${boxNumber}.` });
   };
 
-  const handleFinishStatus = (status: 'verified' | 'partial' | 'cancelled') => {
-    if (!orderGroup) return;
-    onSave({ 
-      ...orderGroup, 
-      status, 
-      isFinalized: true, 
-      finalizedAt: new Date().toISOString(), 
-      totalBoxes: orderGroup.boxes?.length || 1 
+  const updateGroupBatchValidation = (productCode: string) => {
+    if (!orderGroup || isFinalized) {
+      return;
+    }
+
+    const group = groupedItems.find((item) => item.productCode === productCode);
+    if (!group) {
+      return;
+    }
+
+    const enteredBatch = (batchInputs[productCode] || "").trim();
+    const normalizedEnteredBatch = normalizeBatchValue(enteredBatch);
+    const hasMatch = normalizedEnteredBatch !== "" && group.lots.some((lot) => normalizeBatchValue(lot.batch) === normalizedEnteredBatch);
+    const nextStatus: 'pending' | 'matched' | 'mismatch' = normalizedEnteredBatch === "" ? 'pending' : hasMatch ? 'matched' : 'mismatch';
+
+    const updatedItems = orderGroup.items.map((item) =>
+      item.productCode === productCode
+        ? {
+            ...item,
+            enteredBatch,
+            batchValidationStatus: nextStatus,
+          }
+        : item
+    );
+
+    onSave({
+      ...orderGroup,
+      items: updatedItems,
     });
-    onClose();
-    toast({ title: "Certificación finalizada", description: "La certificación fue cerrada y su estado quedó actualizado correctamente." });
+
+    if (nextStatus === 'mismatch') {
+      toast({
+        variant: 'destructive',
+        title: 'Lote no coincide',
+        description: `El lote digitado para el SKU ${productCode} no coincide con el lote registrado en la tarea.`,
+      });
+      return;
+    }
+
+    if (nextStatus === 'matched') {
+      toast({
+        title: 'Lote validado',
+        description: `El lote del SKU ${productCode} coincide con la tarea asignada.`,
+      });
+    }
   };
 
-  const totalGroups = groupedItems.length;
+  const handleRequestFinalize = (status: FinalizeStatus) => {
+    const invalidBatchGroups = isManualMode
+      ? groupedItems.filter((group) => group.totalVerified > 0 && getBatchValidationState(group).status !== 'matched')
+      : [];
+
+    if (invalidBatchGroups.length > 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Lotes pendientes de validar',
+        description: 'Debes validar el lote de todos los SKU certificados antes de finalizar la certificación.',
+      });
+      return;
+    }
+
+    setPendingFinalizeStatus(status);
+    setIsSignatureOpen(true);
+  };
+
+  const confirmFinalizeWithSignature = () => {
+    if (!orderGroup || !pendingFinalizeStatus) {
+      return;
+    }
+
+    const canvas = signatureCanvasRef.current;
+    const signatureValue = canvas?.toDataURL('image/png') || '';
+
+    if (!isSignatureDirty || !signatureValue) {
+      toast({
+        variant: 'destructive',
+        title: 'Firma requerida',
+        description: 'Debes registrar la firma de quien realizó la certificación antes de finalizar.',
+      });
+      return;
+    }
+
+    onSave({ 
+      ...orderGroup, 
+      status: pendingFinalizeStatus, 
+      isFinalized: true, 
+      finalizedAt: new Date().toISOString(), 
+      totalBoxes: orderGroup.boxes?.length || 1,
+      certificationSignature: signatureValue,
+      certifiedByUserId: currentUser?.id,
+      certifiedByName: signatureSignerName.trim() || currentUser?.name || 'Sin firmante',
+    });
+
+    setIsSignatureOpen(false);
+    setPendingFinalizeStatus(null);
+    onClose();
+    toast({ title: "Certificación finalizada", description: "La certificación fue cerrada y su firma quedó registrada correctamente." });
+  };
+
+  const filteredGroups = useMemo(() => {
+    const normalizedSearch = skuSearchTerm.trim().toLowerCase();
+
+    if (!normalizedSearch) {
+      return groupedItems;
+    }
+
+    return groupedItems.filter((group) => group.productCode.toLowerCase().includes(normalizedSearch));
+  }, [groupedItems, skuSearchTerm]);
+
+  const totalGroups = filteredGroups.length;
   const totalPages = Math.ceil(totalGroups / itemsPerPage);
-  const paginatedGroups = useMemo(() => groupedItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage), [groupedItems, currentPage, itemsPerPage]);
+  const paginatedGroups = useMemo(
+    () => filteredGroups.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage),
+    [filteredGroups, currentPage, itemsPerPage]
+  );
 
   const verifiedTotal = orderGroup.items.reduce((acc, i) => acc + (Number(i.verifiedQuantity) || 0), 0);
   const requestedTotal = orderGroup.items.reduce((acc, i) => acc + i.quantity, 0);
@@ -436,23 +683,37 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
 
   const currentBox = orderGroup.boxes?.find(b => b.boxNumber === activeBoxIndex);
 
+  const getStatusBadgeClassName = (status: GroupedSKUItem['status']) => cn(
+    "text-[8px] font-bold px-2 py-0.5 rounded-full border",
+    status === 'verified'
+      ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+      : status === 'partial'
+        ? "bg-amber-50 text-amber-700 border-amber-100"
+        : "bg-red-50 text-red-700 border-red-100"
+  );
+
+  const getStatusLabel = (status: GroupedSKUItem['status']) => (
+    status === 'verified' ? 'Certificado' : status === 'partial' ? 'Parcial' : 'Pendiente'
+  );
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-[95vw] w-[1500px] h-[92vh] flex flex-col p-0 overflow-hidden border border-slate-100 shadow-2xl rounded-2xl bg-white">
+      <DialogContent className="h-[96vh] w-[calc(100vw-0.75rem)] max-w-[1500px] flex flex-col p-0 overflow-hidden border border-slate-100 shadow-2xl rounded-2xl bg-white sm:h-[92vh] sm:max-w-[95vw]">
         
         {/* Header - consistente con OrderViewModal y OrdersPanel */}
-        <DialogHeader className="p-6 pb-4 bg-white border-b border-slate-100 shrink-0 space-y-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-6">
-              <div className="flex items-center gap-3">
+        <DialogHeader className="p-4 sm:p-6 pb-4 bg-white border-b border-slate-100 shrink-0 space-y-4">
+          <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
+            <div className="flex flex-col items-start gap-4 xl:flex-row xl:items-center xl:gap-6">
+              <div className="flex w-full flex-col gap-3">
+                <div className="flex items-center gap-3">
                 <div className="size-12 rounded-xl bg-gradient-to-br from-[#1d57b7]/10 to-[#3b82f6]/10 flex items-center justify-center text-primary shadow-sm">
                   <ScanBarcode className="size-6" />
                 </div>
-                <div className="space-y-0.5">
+                <div className="min-w-0 space-y-0.5">
                   <DialogTitle className="text-xl font-bold tracking-tight text-slate-800">
                     Certificación {orderGroup.id}
                   </DialogTitle>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline" className="text-[9px] font-semibold border-primary/20 bg-primary/5 text-primary rounded-full px-2.5 py-0.5">
                       Pedido #{orderGroup.orderNumber}
                     </Badge>
@@ -466,11 +727,92 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                 </div>
               </div>
 
-              <div className="h-10 w-px bg-slate-200" />
+                <div className="flex w-full flex-col gap-2 xl:hidden">
+                  <div className="grid w-full grid-cols-1 items-stretch gap-2 md:grid-cols-[auto,minmax(0,1fr),auto]">
+                    <div className="flex min-w-0 items-center gap-1 rounded-xl border border-slate-100 bg-slate-50 p-1">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10"
+                      onClick={() => setActiveBoxIndex(Math.max(1, activeBoxIndex - 1))}
+                    >
+                      <ChevronLeft className="size-3.5"/>
+                    </Button>
+                    <Badge className="h-7 min-w-[106px] whitespace-nowrap rounded-lg bg-primary px-3 text-center text-[10px] font-bold shadow-sm shadow-primary/20">
+                      Empaque #{activeBoxIndex}
+                    </Badge>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10"
+                      onClick={() => setActiveBoxIndex(activeBoxIndex + 1)}
+                    >
+                      <ChevronRight className="size-3.5"/>
+                    </Button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="ml-0.5 h-8 w-8 rounded-lg text-primary hover:bg-primary/10"
+                            onClick={() => {
+                              const maxBox = orderGroup.boxes?.length ? Math.max(...orderGroup.boxes.map(b => b.boxNumber)) : 0;
+                              setActiveBoxIndex(maxBox + 1);
+                            }}
+                          >
+                            <Plus className="size-3.5"/>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent className="bg-white border border-slate-100 shadow-lg rounded-xl text-[10px] font-semibold">
+                          Nuevo empaque
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    </div>
+
+                    <div className={cn(
+                      "flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2",
+                      isManualMode ? "border-emerald-100 bg-emerald-50/80" : "border-primary/10 bg-primary/5"
+                    )}>
+                      <Badge className={cn(
+                        "shrink-0 rounded-full border px-2 py-1 text-[8px] font-bold uppercase tracking-[0.14em]",
+                        isManualMode ? "border-emerald-200 bg-white text-emerald-700" : "border-primary/10 bg-white text-primary"
+                      )}>
+                        {isManualMode ? 'Modo manual' : isAutomaticBlindMode ? 'Auto ciego' : 'Auto cantidades'}
+                      </Badge>
+                      <span className="min-w-0 text-[10px] font-medium leading-4 text-slate-500">
+                        {isManualMode
+                          ? 'Configurado desde el proceso maestro.'
+                          : isAutomaticBlindMode
+                            ? 'Escaneo sin mostrar cantidades.'
+                            : 'Escaneo mostrando cantidades.'}
+                      </span>
+                    </div>
+
+                        <div className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 md:w-auto md:justify-center">
+                        <div className="text-center">
+                      <p className="text-[8px] font-bold uppercase tracking-wider text-slate-400">Empaques</p>
+                      <p className="text-lg font-bold text-primary">{(orderGroup.boxes?.length || 0)}</p>
+                    </div>
+                    <div className="h-8 w-px bg-slate-200" />
+                    <div className="text-center">
+                      <p className="text-[8px] font-bold uppercase tracking-wider text-slate-400">Unidades</p>
+                      <div className="flex items-baseline gap-0.5">
+                        <span className="text-lg font-bold text-emerald-600">{verifiedTotal}</span>
+                        <span className="text-[11px] font-semibold text-slate-300">/{requestedTotal}</span>
+                      </div>
+                    </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="hidden xl:block h-10 w-px bg-slate-200" />
 
               {/* Navegación de empaques */}
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1 p-1 bg-slate-50 rounded-xl border border-slate-100">
+              <div className="flex w-full flex-col items-start gap-3 lg:flex-row lg:items-center xl:flex-nowrap">
+                <div className="hidden items-center gap-1 rounded-xl border border-slate-100 bg-slate-50 p-1 xl:flex">
                   <Button 
                     variant="ghost" 
                     size="icon" 
@@ -479,7 +821,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                   >
                     <ChevronLeft className="size-3.5"/>
                   </Button>
-                  <Badge className="bg-primary px-3 h-7 rounded-lg text-[10px] font-bold shadow-sm shadow-primary/20">
+                  <Badge className="h-7 min-w-[118px] whitespace-nowrap rounded-lg bg-primary px-3 text-center text-[10px] font-bold shadow-sm shadow-primary/20">
                     Empaque #{activeBoxIndex}
                   </Badge>
                   <Button 
@@ -512,22 +854,28 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                   </TooltipProvider>
                 </div>
 
-                {/* Switches de modo */}
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-lg border border-slate-100">
-                    <span className="text-[8px] font-semibold text-slate-400 uppercase tracking-wider">Manual</span>
-                    <Switch checked={isManualMode} onCheckedChange={handleToggleManual} className="scale-75" />
-                  </div>
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-lg border border-slate-100">
-                    <Zap className={cn("size-2.5", isAutoMode ? "text-primary" : "text-slate-300")} />
-                    <span className="text-[8px] font-semibold text-slate-400 uppercase tracking-wider">Auto</span>
-                    <Switch checked={isAutoMode} onCheckedChange={handleToggleAuto} className="scale-75" />
-                  </div>
+                <div className={cn(
+                  "hidden w-full flex-col gap-2 rounded-xl border px-3 py-2 sm:flex-row sm:items-center lg:flex-1 xl:flex xl:min-w-[360px] xl:max-w-[560px] xl:flex-nowrap",
+                  isManualMode ? "border-emerald-100 bg-emerald-50/80" : "border-primary/10 bg-primary/5"
+                )}>
+                  <Badge className={cn(
+                    "shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.18em]",
+                    isManualMode ? "border-emerald-200 bg-white text-emerald-700" : "border-primary/10 bg-white text-primary"
+                  )}>
+                    {isManualMode ? 'Modo manual' : isAutomaticBlindMode ? 'Automático ciego' : 'Automático con cantidades'}
+                  </Badge>
+                  <span className="text-[10px] font-medium text-slate-500 xl:whitespace-nowrap xl:text-[11px]">
+                    {isManualMode
+                      ? 'Configurado desde el proceso maestro.'
+                      : isAutomaticBlindMode
+                        ? 'Escaneo habilitado sin mostrar cantidades por SKU.'
+                        : 'Escaneo habilitado mostrando cantidades por SKU.'}
+                  </span>
                 </div>
 
                 {/* Input de escaneo */}
                 {!isManualMode && !isFinalized && (
-                  <div className="relative">
+                  <div className="relative w-full lg:w-auto">
                     <ScanBarcode className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-slate-400" />
                     <input 
                       ref={inputRef} 
@@ -535,7 +883,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                       onChange={(e) => setBarcodeInput(e.target.value)} 
                       onKeyDown={(e) => e.key === 'Enter' && handleProcessBarcode(barcodeInput)} 
                       placeholder="Escanear producto en empaque activo..." 
-                      className="h-10 w-80 rounded-xl pl-10 pr-4 border-slate-200 bg-white text-sm font-medium text-slate-700 placeholder:text-slate-400 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all" 
+                      className="h-10 w-full lg:w-80 rounded-xl pl-10 pr-4 border-slate-200 bg-white text-sm font-medium text-slate-700 placeholder:text-slate-400 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all" 
                     />
                   </div>
                 )}
@@ -543,7 +891,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
             </div>
 
             {/* Panel de estadísticas compacto */}
-            <div className="flex items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
+            <div className="hidden w-full items-center justify-center gap-4 rounded-xl border border-slate-100 bg-slate-50 p-3 xl:flex sm:w-auto">
               <div className="text-center px-3">
                 <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Empaques</p>
                 <p className="text-xl font-bold text-primary">{(orderGroup.boxes?.length || 0)}</p>
@@ -560,31 +908,88 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
           </div>
 
           {/* Info de cliente y tienda */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-6">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
-                  <Building2 className="size-3.5" />
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:w-auto xl:flex-1">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full justify-between rounded-xl border-slate-200 bg-slate-50 px-3 text-left text-slate-700 hover:bg-slate-100 sm:w-auto sm:min-w-[280px] xl:hidden"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="flex size-8 items-center justify-center rounded-lg bg-white text-primary shadow-sm ring-1 ring-slate-100">
+                        <Eye className="size-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">Cliente y tienda</span>
+                        <span className="block truncate text-xs font-semibold text-slate-700">
+                          {orderGroup.customerName} / {orderGroup.storeName}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="text-[10px] font-semibold text-slate-400">Ver</span>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-[min(92vw,360px)] rounded-2xl border-slate-100 p-4 shadow-xl">
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+                      <div className="rounded-lg bg-white p-2 text-slate-400 shadow-sm ring-1 ring-slate-100">
+                        <Building2 className="size-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Cliente</p>
+                        <p className="text-sm font-bold text-slate-700 break-words">{orderGroup.customerName}</p>
+                        <p className="text-[10px] font-mono text-slate-400">NIT: {orderGroup.nit}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+                      <div className="rounded-lg bg-white p-2 text-slate-400 shadow-sm ring-1 ring-slate-100">
+                        <StoreIcon className="size-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Punto de venta</p>
+                        <p className="text-sm font-bold text-slate-700 break-words">{orderGroup.storeName}</p>
+                        <p className="text-[10px] font-mono text-slate-400">Cód: {orderGroup.storeCode}</p>
+                      </div>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
+              <div className="hidden xl:flex xl:items-center xl:gap-6">
+                <div className="flex items-center gap-2">
+                  <div className="rounded-lg bg-slate-100 p-1.5 text-slate-400">
+                    <Building2 className="size-3.5" />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Cliente</p>
+                    <p className="text-xs font-bold text-slate-700">{orderGroup.customerName}</p>
+                    <p className="text-[9px] font-mono text-slate-400">NIT: {orderGroup.nit}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Cliente</p>
-                  <p className="text-xs font-bold text-slate-700">{orderGroup.customerName}</p>
-                  <p className="text-[9px] font-mono text-slate-400">NIT: {orderGroup.nit}</p>
+                <div className="h-7 w-px bg-slate-200" />
+                <div className="flex items-center gap-2">
+                  <div className="rounded-lg bg-slate-100 p-1.5 text-slate-400">
+                    <StoreIcon className="size-3.5" />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Punto de venta</p>
+                    <p className="max-w-[220px] truncate text-xs font-bold text-slate-700">{orderGroup.storeName}</p>
+                    <p className="text-[9px] font-mono text-slate-400">Cód: {orderGroup.storeCode}</p>
+                  </div>
                 </div>
               </div>
-              <div className="w-px h-7 bg-slate-200" />
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
-                  <StoreIcon className="size-3.5" />
-                </div>
-                <div>
-                  <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Punto de venta</p>
-                  <p className="text-xs font-bold text-slate-700 truncate max-w-[200px]">{orderGroup.storeName}</p>
-                  <p className="text-[9px] font-mono text-slate-400">Cód: {orderGroup.storeCode}</p>
-                </div>
+              <div className="relative w-full sm:max-w-[190px] xl:max-w-[210px]">
+                <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={skuSearchTerm}
+                  onChange={(event) => setSkuSearchTerm(event.target.value)}
+                  placeholder="Buscar SKU..."
+                  className="h-10 rounded-xl border-slate-200 bg-slate-50 pl-9 pr-3 text-xs font-medium text-slate-700 placeholder:text-slate-400"
+                />
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 self-start xl:self-auto">
               <span className="text-[9px] font-semibold text-slate-500 uppercase tracking-wider">Progreso</span>
               <Badge className="bg-primary text-white font-bold text-[10px] rounded-full px-2.5 py-0.5">
                 {Math.round(progressPercent)}%
@@ -599,22 +1004,29 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
         </DialogHeader>
 
         {/* Cuerpo del Modal */}
-        <div className="flex-1 overflow-hidden flex flex-col p-6 gap-5">
-          <div className="grid grid-cols-12 gap-5 flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden flex flex-col p-3 sm:p-6 gap-5">
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 flex-1 overflow-hidden">
             
             {/* Columna izquierda - Tabla de SKUs */}
-            <div className="col-span-9 flex flex-col overflow-hidden">
+            <div className="xl:col-span-8 2xl:col-span-9 flex flex-col overflow-hidden min-h-0">
               <Card className="border border-slate-100 shadow-sm rounded-xl overflow-hidden bg-white flex flex-col flex-1">
                 <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
-                  <ScrollArea className="flex-1">
+                  <ScrollArea className="hidden flex-1 xl:block">
+                    <div className="min-w-[1040px]">
                     <Table>
                       <TableHeader className="bg-slate-50/80 sticky top-0 z-10">
                         <TableRow className="border-b border-slate-100">
                           <TableHead className="pl-5 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">SKU / Código</TableHead>
                           <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Descripción</TableHead>
-                          <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Lote</TableHead>
-                          <TableHead className="py-3 text-center text-[10px] font-bold text-slate-500 uppercase tracking-wider w-24">Solicitado</TableHead>
-                          <TableHead className="py-3 text-center text-[10px] font-bold text-emerald-600 uppercase tracking-wider w-32">Certificado</TableHead>
+                          <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                            {isAutomaticBlindMode ? 'Lote' : 'Lote registrado'}
+                          </TableHead>
+                          <TableHead className="py-3 text-center text-[10px] font-bold text-slate-500 uppercase tracking-wider w-24">
+                            {isAutomaticBlindMode ? 'Cantidad' : 'Solicitado'}
+                          </TableHead>
+                          <TableHead className="py-3 text-center text-[10px] font-bold text-emerald-600 uppercase tracking-wider w-[280px]">
+                            {isManualMode ? 'Certificado + lote' : isAutomaticBlindMode ? 'Escaneo' : 'Certificado'}
+                          </TableHead>
                           <TableHead className="pr-5 py-3 text-right text-[10px] font-bold text-slate-500 uppercase tracking-wider">Estado</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -626,6 +1038,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                           
                           const isFull = group.totalVerified >= group.totalQuantity;
                           const hasMultipleLots = group.lots.length > 1;
+                          const batchValidation = getBatchValidationState(group);
 
                           return (
                             <TableRow key={idx} className="group hover:bg-slate-50/50 transition-colors border-b border-slate-50">
@@ -636,6 +1049,11 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                                 <p className="text-[11px] font-medium text-slate-600 truncate max-w-[200px]">{group.description}</p>
                               </TableCell>
                               <TableCell className="py-3">
+                                {isAutomaticBlindMode && !isFinalized ? (
+                                  <Badge variant="outline" className="text-[8px] font-bold rounded-full bg-slate-50 text-slate-400 border-slate-200">
+                                    Oculto
+                                  </Badge>
+                                ) : isFull ? (
                                 <TooltipProvider>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
@@ -664,43 +1082,134 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                                     </TooltipContent>
                                   </Tooltip>
                                 </TooltipProvider>
+                                ) : (
+                                  <Badge variant="outline" className="text-[8px] font-bold rounded-full bg-slate-50 text-slate-400 border-slate-200">
+                                    Visible al completar
+                                  </Badge>
+                                )}
                               </TableCell>
                               <TableCell className="py-3 text-center">
-                                <span className="text-[11px] font-semibold text-slate-500">{group.totalQuantity}</span>
+                                {isAutomaticBlindMode && !isFinalized ? (
+                                  <Badge variant="outline" className="text-[8px] font-bold rounded-full bg-slate-50 text-slate-400 border-slate-200">
+                                    Oculto
+                                  </Badge>
+                                ) : isFull ? (
+                                  <span className="text-[11px] font-semibold text-slate-500">{group.totalQuantity}</span>
+                                ) : (
+                                  <Badge variant="outline" className="text-[8px] font-bold rounded-full bg-slate-50 text-slate-400 border-slate-200">
+                                    Oculto
+                                  </Badge>
+                                )}
                               </TableCell>
                               <TableCell className="py-3 text-center">
                                 {isManualMode && !isFinalized ? (
-                                  <div className="flex flex-col items-center gap-1">
-                                    <Input 
-                                      type="number" 
-                                      value={qtyInThisBox} 
-                                      onChange={(e) => updateGroupQuantityManual(group.productCode, Number(e.target.value))} 
-                                      disabled={isFull}
-                                      className={cn(
-                                        "w-20 h-8 text-center font-bold rounded-lg border-primary/30 bg-primary/5 focus:ring-primary/20 text-xs",
-                                        isFull && "opacity-50 cursor-not-allowed bg-slate-100 border-slate-200"
-                                      )} 
-                                    />
-                                    <span className="text-[8px] font-semibold text-slate-400 uppercase tracking-wider">
-                                      Total: {group.totalVerified}
-                                    </span>
+                                  <div className="mx-auto flex w-full max-w-[250px] items-center gap-2 rounded-2xl border border-emerald-100 bg-gradient-to-r from-emerald-50 via-white to-sky-50 p-2.5 shadow-sm">
+                                    <div className="flex min-w-[74px] flex-col items-center rounded-xl bg-white px-2 py-2 shadow-sm ring-1 ring-emerald-100">
+                                      <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Cantidad</span>
+                                      <Input 
+                                        type="number" 
+                                        value={qtyInThisBox} 
+                                        onChange={(e) => updateGroupQuantityManual(group.productCode, Number(e.target.value))} 
+                                        disabled={isFull}
+                                        className={cn(
+                                          "mt-1 h-8 w-16 border-0 bg-transparent px-0 text-center text-sm font-extrabold text-emerald-700 shadow-none focus-visible:ring-0",
+                                          isFull && "opacity-50 cursor-not-allowed text-slate-400"
+                                        )} 
+                                      />
+                                      <span className="text-[8px] font-semibold text-slate-400">Total {group.totalVerified}</span>
+                                    </div>
+
+                                    <div className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-xl bg-white/90 px-3 py-2 ring-1 ring-slate-100">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Lote</span>
+                                        <Badge className={cn("text-[8px] font-bold px-2 py-0.5 rounded-full border",
+                                          batchValidation.status === 'matched' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                                          batchValidation.status === 'mismatch' ? 'bg-red-50 text-red-700 border-red-100' :
+                                          'bg-slate-50 text-slate-500 border-slate-100'
+                                        )}>
+                                          {batchValidation.status === 'matched' ? 'OK' : batchValidation.status === 'mismatch' ? 'Error' : 'Pendiente'}
+                                        </Badge>
+                                      </div>
+                                      <Input
+                                        value={batchInputs[group.productCode] ?? ''}
+                                        onChange={(event) => setBatchInputs((current) => ({ ...current, [group.productCode]: event.target.value }))}
+                                        onBlur={() => updateGroupBatchValidation(group.productCode)}
+                                        onKeyDown={(event) => {
+                                          if (event.key === 'Enter') {
+                                            event.preventDefault();
+                                            updateGroupBatchValidation(group.productCode);
+                                          }
+                                        }}
+                                        placeholder="Digita lote"
+                                        className="h-9 rounded-xl border-slate-200 bg-slate-50 text-[11px] font-semibold"
+                                      />
+                                      <span className="text-left text-[9px] font-medium text-slate-400">
+                                        Valida el lote junto al avance certificado.
+                                      </span>
+                                    </div>
+                                  </div>
+                                ) : isAutomaticBlindMode ? (
+                                  <div className="mx-auto flex w-full max-w-[250px] items-center gap-2 rounded-2xl border border-slate-100 bg-slate-50/80 p-2.5">
+                                    <div className="flex min-w-[70px] flex-col items-center rounded-xl bg-white px-2 py-2 shadow-sm ring-1 ring-slate-100">
+                                      <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Escaneo</span>
+                                      <span className={cn("mt-1 text-sm font-extrabold",
+                                        group.totalVerified >= group.totalQuantity ? "text-emerald-600" :
+                                        group.totalVerified > 0 ? "text-amber-600" : "text-slate-300"
+                                      )}>
+                                        {group.totalVerified > 0 ? 'Activo' : 'Pendiente'}
+                                      </span>
+                                    </div>
+                                    <div className="flex min-w-0 flex-1 flex-col gap-1 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-100">
+                                      <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Visibilidad</span>
+                                      <span className="truncate text-left text-[11px] font-semibold text-slate-600">
+                                        Cantidades ocultas durante la certificación.
+                                      </span>
+                                    </div>
                                   </div>
                                 ) : (
-                                  <span className={cn("text-[11px] font-bold", 
-                                    group.totalVerified >= group.totalQuantity ? "text-emerald-600" : 
-                                    group.totalVerified > 0 ? "text-amber-600" : "text-slate-300"
-                                  )}>
-                                    {group.totalVerified}
-                                  </span>
+                                  <div className="mx-auto flex w-full max-w-[250px] items-center gap-2 rounded-2xl border border-slate-100 bg-slate-50/80 p-2.5">
+                                    <div className="flex min-w-[70px] flex-col items-center rounded-xl bg-white px-2 py-2 shadow-sm ring-1 ring-slate-100">
+                                      <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Cantidad</span>
+                                      <span className={cn("mt-1 text-sm font-extrabold", 
+                                        group.totalVerified >= group.totalQuantity ? "text-emerald-600" : 
+                                        group.totalVerified > 0 ? "text-amber-600" : "text-slate-300"
+                                      )}>
+                                        {group.totalVerified}
+                                      </span>
+                                    </div>
+                                    <div className="flex min-w-0 flex-1 flex-col gap-1 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-100">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Lote</span>
+                                        <Badge className={cn("text-[8px] font-bold px-2 py-0.5 rounded-full border",
+                                          isAutomaticQuantityMode
+                                            ? group.totalVerified > 0
+                                              ? 'bg-sky-50 text-sky-700 border-sky-100'
+                                              : 'bg-slate-50 text-slate-500 border-slate-100'
+                                            : batchValidation.status === 'matched'
+                                              ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                                              : batchValidation.status === 'mismatch'
+                                                ? 'bg-red-50 text-red-700 border-red-100'
+                                                : 'bg-slate-50 text-slate-500 border-slate-100'
+                                        )}>
+                                          {isAutomaticQuantityMode
+                                            ? group.totalVerified > 0 ? 'Escaneado' : 'Sin escaneo'
+                                            : batchValidation.status === 'matched' ? 'Coincide' : batchValidation.status === 'mismatch' ? 'No coincide' : 'Sin validar'}
+                                        </Badge>
+                                      </div>
+                                      <span className="truncate text-left text-[11px] font-semibold text-slate-600">
+                                        {isAutomaticQuantityMode
+                                          ? hasMultipleLots
+                                            ? 'Múltiples lotes'
+                                            : group.lots.find((lot) => lot.verifiedQuantity > 0)?.batch || group.lots[0]?.batch || 'Sin registro'
+                                          : batchValidation.enteredBatch || 'Sin registro'}
+                                      </span>
+                                    </div>
+                                  </div>
                                 )}
                               </TableCell>
                               <TableCell className="pr-5 py-3 text-right">
-                                <Badge className={cn("text-[8px] font-bold px-2 py-0.5 rounded-full border", 
-                                  group.status === 'verified' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : 
-                                  group.status === 'partial' ? "bg-amber-50 text-amber-700 border-amber-100" : 
-                                  "bg-red-50 text-red-700 border-red-100"
-                                )}>
-                                  {group.status === 'verified' ? 'Certificado' : group.status === 'partial' ? 'Parcial' : 'Pendiente'}
+                                <Badge className={getStatusBadgeClassName(group.status)}>
+                                  {getStatusLabel(group.status)}
                                 </Badge>
                               </TableCell>
                             </TableRow>
@@ -708,6 +1217,165 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                         })}
                       </TableBody>
                     </Table>
+                    </div>
+                  </ScrollArea>
+
+                  <ScrollArea className="flex-1 xl:hidden">
+                    <div className="space-y-3 p-3 sm:p-4">
+                      {paginatedGroups.map((group, idx) => {
+                        const qtyInThisBox = currentBox?.items
+                          .filter(bi => bi.productCode === group.productCode)
+                          .reduce((acc, bi) => acc + bi.quantity, 0) || 0;
+
+                        const isFull = group.totalVerified >= group.totalQuantity;
+                        const hasMultipleLots = group.lots.length > 1;
+                        const batchValidation = getBatchValidationState(group);
+
+                        return (
+                          <div key={idx} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0 space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant="outline" className="bg-primary/5 text-primary border-primary/10 px-2.5 py-0.5 rounded-full text-[9px] font-bold">
+                                    {group.productCode}
+                                  </Badge>
+                                  <Badge className={getStatusBadgeClassName(group.status)}>
+                                    {getStatusLabel(group.status)}
+                                  </Badge>
+                                </div>
+                                <p className="text-sm font-semibold leading-5 text-slate-800">{group.description}</p>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 sm:min-w-[180px]">
+                                <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-center">
+                                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">Solicitado</p>
+                                  <p className="mt-1 text-sm font-extrabold text-slate-700">
+                                    {isAutomaticBlindMode && !isFinalized
+                                      ? 'Oculto'
+                                      : isFull
+                                        ? group.totalQuantity
+                                        : 'Oculto'}
+                                  </p>
+                                </div>
+                                <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-2 text-center">
+                                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-emerald-600">Certificado</p>
+                                  <p className="mt-1 text-sm font-extrabold text-emerald-700">{group.totalVerified}</p>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                                    {isAutomaticBlindMode ? 'Lote' : 'Lote registrado'}
+                                  </span>
+                                  {hasMultipleLots && <Info className="size-3 text-amber-400" />}
+                                </div>
+                                <p className="mt-2 text-sm font-semibold text-slate-700 break-words">
+                                  {isAutomaticBlindMode && !isFinalized
+                                    ? 'Oculto durante la certificación'
+                                    : isFull
+                                      ? hasMultipleLots
+                                        ? 'Múltiples lotes'
+                                        : (group.lots[0]?.batch || 'N/A')
+                                      : 'Visible al completar'}
+                                </p>
+                                {hasMultipleLots && isFull && (
+                                  <div className="mt-2 space-y-1.5 rounded-xl border border-amber-100 bg-amber-50/70 p-2.5">
+                                    {group.lots.map((lot, lotIndex) => (
+                                      <div key={lotIndex} className="flex items-center justify-between gap-3 text-[11px]">
+                                        <span className="font-mono font-semibold text-slate-600">{lot.batch || 'N/A'}</span>
+                                        <span className="font-bold text-slate-500">{lot.verifiedQuantity} / {lot.quantity}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3">
+                                {isManualMode && !isFinalized ? (
+                                  <div className="space-y-3">
+                                    <div className="grid grid-cols-[92px,1fr] gap-3">
+                                      <div className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-center shadow-sm">
+                                        <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Cantidad</span>
+                                        <Input
+                                          type="number"
+                                          value={qtyInThisBox}
+                                          onChange={(e) => updateGroupQuantityManual(group.productCode, Number(e.target.value))}
+                                          disabled={isFull}
+                                          className={cn(
+                                            "mt-1 h-8 border-0 bg-transparent px-0 text-center text-sm font-extrabold text-emerald-700 shadow-none focus-visible:ring-0",
+                                            isFull && "cursor-not-allowed text-slate-400 opacity-50"
+                                          )}
+                                        />
+                                        <span className="text-[8px] font-semibold text-slate-400">Total {group.totalVerified}</span>
+                                      </div>
+                                      <div className="rounded-xl border border-slate-100 bg-white px-3 py-2 shadow-sm">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-400">Lote</span>
+                                          <Badge className={cn("text-[8px] font-bold px-2 py-0.5 rounded-full border",
+                                            batchValidation.status === 'matched' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                                            batchValidation.status === 'mismatch' ? 'bg-red-50 text-red-700 border-red-100' :
+                                            'bg-slate-50 text-slate-500 border-slate-100'
+                                          )}>
+                                            {batchValidation.status === 'matched' ? 'OK' : batchValidation.status === 'mismatch' ? 'Error' : 'Pendiente'}
+                                          </Badge>
+                                        </div>
+                                        <Input
+                                          value={batchInputs[group.productCode] ?? ''}
+                                          onChange={(event) => setBatchInputs((current) => ({ ...current, [group.productCode]: event.target.value }))}
+                                          onBlur={() => updateGroupBatchValidation(group.productCode)}
+                                          onKeyDown={(event) => {
+                                            if (event.key === 'Enter') {
+                                              event.preventDefault();
+                                              updateGroupBatchValidation(group.productCode);
+                                            }
+                                          }}
+                                          placeholder="Digita lote"
+                                          className="mt-2 h-9 rounded-xl border-slate-200 bg-slate-50 text-[11px] font-semibold"
+                                        />
+                                      </div>
+                                    </div>
+                                    <p className="text-[10px] font-medium text-slate-400">Valida el lote junto al avance certificado.</p>
+                                  </div>
+                                ) : isAutomaticBlindMode ? (
+                                  <div className="space-y-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">Escaneo</span>
+                                      <span className={cn("text-sm font-extrabold",
+                                        group.totalVerified >= group.totalQuantity ? 'text-emerald-600' :
+                                        group.totalVerified > 0 ? 'text-amber-600' : 'text-slate-300'
+                                      )}>
+                                        {group.totalVerified > 0 ? 'Activo' : 'Pendiente'}
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] font-semibold text-slate-600">Cantidades ocultas durante la certificación.</p>
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">Lote certificado</span>
+                                      <Badge className={cn("text-[8px] font-bold px-2 py-0.5 rounded-full border",
+                                        group.totalVerified > 0
+                                          ? 'bg-sky-50 text-sky-700 border-sky-100'
+                                          : 'bg-slate-50 text-slate-500 border-slate-100'
+                                      )}>
+                                        {group.totalVerified > 0 ? 'Escaneado' : 'Sin escaneo'}
+                                      </Badge>
+                                    </div>
+                                    <p className="text-[11px] font-semibold text-slate-600 break-words">
+                                      {hasMultipleLots
+                                        ? 'Múltiples lotes'
+                                        : group.lots.find((lot) => lot.verifiedQuantity > 0)?.batch || group.lots[0]?.batch || 'Sin registro'}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </ScrollArea>
                 </CardContent>
               </Card>
@@ -728,7 +1396,7 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
             </div>
 
             {/* Columna derecha - Detalle de empaques */}
-            <div className="col-span-3 flex flex-col gap-4 overflow-hidden">
+            <div className="hidden xl:flex xl:col-span-4 2xl:col-span-3 flex-col gap-4 overflow-hidden min-h-[260px] xl:min-h-0">
               <Card className="border border-slate-100 shadow-sm rounded-xl bg-white flex flex-col flex-1 overflow-hidden">
                 <CardHeader className="p-4 pb-3 shrink-0 border-b border-slate-100 bg-white">
                   <div className="flex items-center justify-between">
@@ -836,13 +1504,13 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="my-1" />
                   <DropdownMenuItem 
-                    onClick={() => handleFinishStatus('partial')} 
+                    onClick={() => handleRequestFinalize('partial')} 
                     className="rounded-lg h-10 gap-2.5 text-sm font-medium cursor-pointer text-amber-600 focus:bg-amber-50"
                   >
                     <ClipboardList className="size-4" /> Finalizar Parcial
                   </DropdownMenuItem>
                   <DropdownMenuItem 
-                    onClick={() => handleFinishStatus('verified')} 
+                    onClick={() => handleRequestFinalize('verified')} 
                     className="rounded-lg h-10 gap-2.5 text-sm font-medium cursor-pointer text-emerald-600 focus:bg-emerald-50"
                   >
                     <CheckCircle2 className="size-4" /> Finalizar 100%
@@ -860,6 +1528,122 @@ const CertificationModal: React.FC<CertificationModalProps> = ({
           </div>
         </div>
       </DialogContent>
+
+      <Dialog open={isSignatureOpen} onOpenChange={setIsSignatureOpen}>
+        <DialogContent className="flex max-h-[92vh] w-[calc(100vw-1rem)] max-w-4xl flex-col overflow-hidden rounded-[24px] border border-slate-100 bg-white p-0 shadow-[0_30px_80px_rgba(15,23,42,0.18)]">
+          <DialogHeader className="relative overflow-hidden border-b border-slate-100 bg-[radial-gradient(circle_at_top_left,_rgba(29,87,183,0.18),_transparent_42%),linear-gradient(135deg,_#f8fbff_0%,_#ffffff_45%,_#f8fafc_100%)] px-4 py-4 sm:px-5 sm:py-5">
+            <div className="absolute inset-y-0 right-0 w-28 bg-[linear-gradient(135deg,rgba(59,130,246,0.08),transparent)] sm:w-40" />
+            <div className="relative flex items-start gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-white text-primary shadow-lg shadow-primary/10 ring-1 ring-primary/10 sm:size-11">
+                <PencilLine className="size-4.5 sm:size-5" />
+              </div>
+              <div className="min-w-0 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="rounded-full border border-primary/10 bg-primary/5 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.2em] text-primary shadow-sm">
+                    Cierre seguro
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full border-slate-200 bg-white/80 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    {pendingFinalizeStatus === 'verified' ? 'Finalización 100%' : 'Finalización parcial'}
+                  </Badge>
+                </div>
+                <div className="space-y-1">
+                  <DialogTitle className="text-[21px] font-bold tracking-tight text-slate-800 sm:text-[22px]">Firma de certificación</DialogTitle>
+                  <DialogDescription className="max-w-2xl text-[13px] leading-5 text-slate-500 sm:text-sm">
+                    Confirma el cierre del pedido con una firma clara y el nombre del responsable. Esta evidencia quedará guardada para control.
+                  </DialogDescription>
+                </div>
+                <div className="grid gap-2 pt-1 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-white/80 bg-white/85 px-3.5 py-2.5 shadow-sm backdrop-blur">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Pedido</span>
+                    <p className="mt-1 text-sm font-bold text-slate-700">#{orderGroup?.orderNumber || 'N/A'}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/80 bg-white/85 px-3.5 py-2.5 shadow-sm backdrop-blur">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Cliente</span>
+                    <p className="mt-1 truncate text-sm font-bold text-slate-700">{orderGroup?.customerName || 'Sin cliente'}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-4 sm:p-5 lg:grid-cols-[0.88fr,1.32fr]">
+            <div className="space-y-3">
+              <div className="rounded-3xl border border-slate-100 bg-slate-50/80 p-4 shadow-sm">
+                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Responsable</span>
+                <div className="mt-2 space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-700">Nombre completo</label>
+                  <Input
+                    value={signatureSignerName}
+                    onChange={(event) => setSignatureSignerName(event.target.value)}
+                    placeholder="Nombre de quien certifica"
+                    className="h-10 rounded-2xl border-slate-200 bg-white px-4 text-sm font-medium"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
+                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-700/70">Checklist</span>
+                <div className="mt-2.5 space-y-2 text-[13px] leading-5 text-slate-600 sm:text-sm">
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+                    <span>Lotes certificados y validados antes del cierre.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+                    <span>La firma queda asociada al pedido y al usuario.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-xs font-semibold text-slate-700">Firma manuscrita</span>
+                  <p className="text-[11px] text-slate-400">Firma dentro del recuadro como si fuera tu constancia final.</p>
+                </div>
+                <Button type="button" variant="ghost" onClick={clearSignature} className="h-8 rounded-xl px-3 text-xs text-slate-500 hover:bg-slate-100">
+                  Limpiar
+                </Button>
+              </div>
+
+              <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,_#ffffff_0%,_#f8fafc_100%)] p-2.5 shadow-inner">
+                <div className="rounded-[20px] border border-dashed border-slate-300 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.92))] p-2">
+                  <canvas
+                    ref={signatureCanvasRef}
+                    className="h-44 w-full rounded-[16px] bg-[linear-gradient(180deg,rgba(255,255,255,1),rgba(248,250,252,0.95))] touch-none sm:h-48"
+                    onPointerDown={handleSignaturePointerDown}
+                    onPointerMove={handleSignaturePointerMove}
+                    onPointerUp={handleSignaturePointerUp}
+                    onPointerLeave={handleSignaturePointerUp}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Estado de firma</span>
+                  <p className="mt-1 text-sm font-semibold text-slate-700">{isSignatureDirty ? 'Firma lista para guardar' : 'Aún no se ha registrado una firma'}</p>
+                </div>
+                <Badge className={cn("rounded-full border px-3 py-1 text-[9px] font-bold uppercase tracking-[0.18em]",
+                  isSignatureDirty ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-500'
+                )}>
+                  {isSignatureDirty ? 'Completa' : 'Pendiente'}
+                </Badge>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="border-t border-slate-100 bg-slate-50/80 px-4 py-3 sm:px-5 sm:py-4 gap-2">
+            <Button type="button" variant="ghost" onClick={() => setIsSignatureOpen(false)} className="dialog-btn-secondary h-10">
+              <X className="size-4" /> Cancelar
+            </Button>
+            <Button type="button" onClick={confirmFinalizeWithSignature} className="h-10 rounded-2xl bg-gradient-to-r from-[#1d57b7] to-[#2563eb] px-5 text-sm font-semibold text-white shadow-lg shadow-primary/20 hover:opacity-95">
+              <CheckCircle2 className="size-4 mr-2" /> Confirmar y finalizar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 };

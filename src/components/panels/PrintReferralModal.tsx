@@ -30,6 +30,33 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
   const { currentUser } = useAuth();
   const appData = useFilteredAppData(currentUser);
   const [storeInfo, setStoreInfo] = useState<Store | null>(null);
+  const signerName = order?.certifiedByName || order?.certifiedByUserId || 'Sin registro';
+  const hasCertificationSignature = Boolean(order?.certificationSignature);
+  const printableItems = (order?.items || []).filter((item) => Number(item.verifiedQuantity || 0) > 0);
+  const printableTotalUnits = printableItems.reduce((acc, item) => acc + (Number(item.verifiedQuantity) || 0), 0);
+  const printableBoxCountByItem = new Map(
+    printableItems.map((item) => {
+      const matchingBoxes = (order?.boxes || []).filter((box) =>
+        box.items.some((boxItem) => {
+          if (boxItem.productCode !== item.productCode || Number(boxItem.quantity || 0) <= 0) {
+            return false;
+          }
+
+          if (item.batch && boxItem.batch) {
+            return boxItem.batch === item.batch;
+          }
+
+          return true;
+        })
+      );
+
+      return [`${item.productCode}__${item.batch || ''}`, matchingBoxes.length];
+    })
+  );
+  const printableTotalBoxes =
+    (order?.boxes || []).filter((box) => box.items.some((item) => Number(item.quantity || 0) > 0)).length ||
+    Math.max(...Array.from(printableBoxCountByItem.values()), 0) ||
+    0;
 
   useEffect(() => {
     if (order && isOpen) {
@@ -115,6 +142,10 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
             .sign-sub { font-size: 10px; font-weight: 600; color: #94a3b8; }
 
             .footer-tag { margin-top: 60px; text-align: center; font-size: 9px; font-weight: 700; color: #cbd5e1; text-transform: uppercase; letter-spacing: 0.2em; }
+            .signature-top { min-height: 118px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; margin-bottom: 10px; }
+            .signature-image { display: block; max-width: 220px; max-height: 72px; width: auto; height: auto; margin: 0 auto 8px; object-fit: contain; }
+            .signature-name { font-size: 12px; font-weight: 800; color: #1e293b; margin-bottom: 0; }
+            .signature-meta { font-size: 10px; font-weight: 600; color: #94a3b8; }
 
             @media print {
               body { padding: 0; }
@@ -173,13 +204,13 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
                 </tr>
               </thead>
               <tbody>
-                ${order.items.map(item => `
+                ${printableItems.map(item => `
                   <tr>
                     <td class="sku-val">${item.productCode}</td>
                     <td style="text-transform: uppercase;">${item.description}</td>
                     <td style="font-family: monospace; color: #94a3b8;">${item.batch || 'N/A'}</td>
                     <td class="qty-val">${item.verifiedQuantity}</td>
-                    <td class="qty-val">${Math.floor(item.verifiedQuantity / (item.boxFactor || 1))}</td>
+                    <td class="qty-val">${printableBoxCountByItem.get(`${item.productCode}__${item.batch || ''}`) || 0}</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -189,22 +220,27 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
               <div class="totals-box">
                 <div class="total-item">
                   <span class="total-lbl">Total Unidades</span>
-                  <span class="total-val">${order.items.reduce((acc, i) => acc + (i.verifiedQuantity || 0), 0)}</span>
+                  <span class="total-val">${printableTotalUnits}</span>
                 </div>
                 <div class="total-item">
                   <span class="total-lbl">Total Bultos / Cajas</span>
-                  <span class="total-val blue">${order.totalBoxes}</span>
+                  <span class="total-val blue">${printableTotalBoxes}</span>
                 </div>
               </div>
             </div>
 
             <div class="signature-section">
               <div class="sign-box">
+                <div class="signature-top">
+                  ${order.certificationSignature ? `<img src="${order.certificationSignature}" alt="Firma certificador" class="signature-image" />` : '<div style="height: 80px;"></div>'}
+                  <div class="signature-name">${signerName}</div>
+                </div>
                 <div class="sign-line"></div>
-                <span class="sign-label">Firma Autorizada Despacho</span>
-                <span class="sign-sub">Nombre y Cédula</span>
+                <span class="sign-label">Certificado por</span>
+                <span class="sign-sub">Firma registrada en certificación</span>
               </div>
               <div class="sign-box">
+                <div class="signature-top"></div>
                 <div class="sign-line"></div>
                 <span class="sign-label">Recibido por (Cliente)</span>
                 <span class="sign-sub">Firma, Sello y Fecha</span>
@@ -217,6 +253,10 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
       </html>
     `);
     printWindow.document.close();
+    printWindow.focus();
+    printWindow.addEventListener('load', () => {
+      printWindow.print();
+    });
   };
 
   const today = format(new Date(), "dd 'de' MMMM 'de' yyyy", { locale: es });
@@ -240,7 +280,7 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
               onClick={handlePrint} 
               className="rounded-xl bg-gradient-to-r from-[#1d57b7] to-[#1a4a9e] text-white font-semibold text-sm px-6 h-10 shadow-md shadow-primary/20 gap-2 hover:scale-[1.02] transition-all duration-200"
             >
-              <Printer className="size-4" /> Generar documento
+              <Printer className="size-4" /> Imprimir
             </Button>
           </div>
         </DialogHeader>
@@ -306,14 +346,14 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
                   </tr>
                 </thead>
                 <tbody>
-                  {order.items.map((item, idx) => (
+                  {printableItems.map((item, idx) => (
                     <tr key={idx} className="border-b border-slate-50 h-12 hover:bg-slate-50/50">
                       <td className="px-2 text-xs font-bold text-primary">{item.productCode}</td>
                       <td className="px-2 text-[11px] font-medium text-slate-600 uppercase">{item.description}</td>
                       <td className="px-2 text-[10px] font-mono font-semibold text-slate-400">{item.batch || 'N/A'}</td>
                       <td className="px-2 text-center text-xs font-bold text-slate-700">{item.verifiedQuantity}</td>
                       <td className="px-2 text-center text-xs font-bold text-slate-700">
-                        {Math.floor(item.verifiedQuantity / (item.boxFactor || 1))}
+                        {printableBoxCountByItem.get(`${item.productCode}__${item.batch || ''}`) || 0}
                       </td>
                     </tr>
                   ))}
@@ -326,11 +366,11 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
               <div className="w-60 space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Total Unidades</span>
-                  <span className="text-base font-bold text-slate-800">{order.items.reduce((acc, i) => acc + (i.verifiedQuantity || 0), 0)}</span>
+                  <span className="text-base font-bold text-slate-800">{printableTotalUnits}</span>
                 </div>
                 <div className="flex justify-between items-center pt-2 border-t border-slate-100">
                   <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Total Bultos / Cajas</span>
-                  <span className="text-xl font-bold text-primary">{order.totalBoxes}</span>
+                  <span className="text-xl font-bold text-primary">{printableTotalBoxes}</span>
                 </div>
               </div>
             </div>
@@ -338,11 +378,26 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
             {/* Firmas */}
             <div className="grid grid-cols-2 gap-12 mt-12">
               <div className="text-center">
+                <div className="min-h-[118px] mb-2 flex flex-col items-center justify-end">
+                  <div className="h-20 flex items-end justify-center px-4">
+                    {hasCertificationSignature ? (
+                      <img
+                        src={order.certificationSignature}
+                        alt="Firma certificador"
+                        className="max-h-full max-w-[220px] object-contain"
+                      />
+                    ) : (
+                      <span className="text-[10px] font-medium text-slate-300">Sin firma registrada</span>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-bold text-slate-800 block mt-2">{signerName}</span>
+                </div>
                 <div className="h-px bg-slate-200 w-full mb-2" />
-                <span className="text-[10px] font-bold text-slate-700 uppercase block tracking-tight">Firma Autorizada Despacho</span>
-                <span className="text-[9px] font-medium text-slate-400">Nombre y Cédula</span>
+                <span className="text-[10px] font-bold text-slate-700 uppercase block tracking-tight">Certificado por</span>
+                <span className="text-[9px] font-medium text-slate-400">Firma registrada en certificación</span>
               </div>
               <div className="text-center">
+                <div className="min-h-[118px] mb-2" />
                 <div className="h-px bg-slate-200 w-full mb-2" />
                 <span className="text-[10px] font-bold text-slate-700 uppercase block tracking-tight">Recibido por (Cliente)</span>
                 <span className="text-[9px] font-medium text-slate-400">Firma, Sello y Fecha</span>

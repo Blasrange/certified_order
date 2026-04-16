@@ -34,12 +34,12 @@ export function DataTablePagination({
   onPageChange,
 }: DataTablePaginationProps) {
   return (
-    <div className="flex items-center justify-between px-6 w-full h-14">
-      <div className="flex-1 text-sm text-muted-foreground font-medium">
+    <div className="flex w-full flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-2.5">
+      <div className="flex-1 text-center text-sm font-medium text-muted-foreground sm:text-left">
         Total {totalRows} filas.
       </div>
-      <div className="flex items-center space-x-8">
-        <div className="flex items-center space-x-3">
+      <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-center sm:gap-5 lg:gap-8">
+        <div className="flex items-center gap-3">
           <p className="text-sm font-semibold text-slate-600">Filas por página</p>
           <Select
             value={`${pageSize}`}
@@ -59,10 +59,10 @@ export function DataTablePagination({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex items-center justify-center text-sm font-bold text-slate-600 min-w-[120px]">
+        <div className="flex min-w-[136px] items-center justify-center text-sm font-bold text-slate-600">
           Página {currentPage} de {totalPages || 1}
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center gap-2">
           <Button
             variant="ghost"
             className="hidden h-9 w-9 p-0 lg:flex hover:bg-primary/10 text-primary"

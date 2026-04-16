@@ -142,19 +142,19 @@ const TasksPanel = () => {
     <div className="space-y-4 w-full">
       {/* Header con búsqueda - consistente con OrdersPanel */}
       <Card className="border border-slate-100 shadow-sm bg-white rounded-xl overflow-hidden">
-        <CardContent className="p-4 flex items-center justify-between">
-          <div className="flex items-center gap-4 flex-1">
-            <div className="relative">
+        <CardContent className="p-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-4 flex-1 w-full">
+            <div className="relative w-full lg:max-w-xs xl:max-w-sm">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
               <Input 
                 placeholder="Buscar tareas activas por pedido, cliente o ID..." 
-                className="pl-10 h-10 w-80 bg-slate-50 border-slate-200 text-sm font-medium rounded-xl"
+                className="pl-10 h-10 w-full bg-slate-50 border-slate-200 text-sm font-medium rounded-xl"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
           </div>
-          <div className="flex items-center gap-2 bg-primary/5 px-4 py-2 rounded-full border border-primary/10">
+          <div className="flex items-center justify-center gap-2 bg-primary/5 px-4 py-2 rounded-full border border-primary/10 self-start lg:self-auto">
             <Clock className="size-3.5 text-primary" />
             <span className="text-[10px] font-bold text-primary uppercase tracking-wider">
               {filteredTasks.length} Tareas Pendientes

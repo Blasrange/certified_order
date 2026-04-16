@@ -8,6 +8,13 @@ import { AppLogo } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useAuth } from '@/context/auth-context';
 import { useToast } from '@/hooks/use-toast';
 import loginBackground from '../login.png';
@@ -15,9 +22,11 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  IdCard,
   Eye,
   EyeOff,
   Lock,
+  Mail,
   Smartphone,
   User as UserIcon,
 } from 'lucide-react';
@@ -57,6 +66,10 @@ function RegisterPageFallback() {
 
 function RegisterPageContent() {
   const searchParams = useSearchParams();
+  const [name, setName] = React.useState('');
+  const [email, setEmail] = React.useState('');
+  const [documentType, setDocumentType] = React.useState('CC');
+  const [documentNumber, setDocumentNumber] = React.useState('');
   const [username, setUsername] = React.useState('');
   const [phone, setPhone] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
@@ -71,9 +84,10 @@ function RegisterPageContent() {
 
   const mode = searchParams.get('mode');
   const token = searchParams.get('token') || '';
+  const isSignupMode = mode === 'signup';
   const isPasswordChangeMode = mode === 'change-password';
   const isEmailResetMode = mode === 'recover-email' && Boolean(token);
-  const isRecoveryRequestMode = !isPasswordChangeMode && !isEmailResetMode;
+  const isRecoveryRequestMode = !isSignupMode && !isPasswordChangeMode && !isEmailResetMode;
 
   React.useEffect(() => {
     if (isPasswordChangeMode && currentUser?.loginId) {
@@ -83,6 +97,96 @@ function RegisterPageContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isSignupMode) {
+      const cleanName = name.trim();
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanDocumentNumber = documentNumber.trim();
+      const cleanUsername = username.trim().toUpperCase();
+      const cleanPhone = phone.replace(/\D/g, '');
+
+      if (!cleanName || !cleanEmail || !documentType || !cleanDocumentNumber || !cleanUsername || !cleanPhone || !newPassword || !confirmPassword) {
+        toast({
+          variant: 'destructive',
+          title: 'Datos incompletos',
+          description: 'Completa todos los campos requeridos para registrar la cuenta.',
+        });
+        return;
+      }
+
+      if (cleanPhone.length < 10) {
+        toast({
+          variant: 'destructive',
+          title: 'Teléfono inválido',
+          description: 'Ingresa un número de teléfono válido de al menos 10 dígitos.',
+        });
+        return;
+      }
+
+      if (newPassword.length < 8) {
+        toast({
+          variant: 'destructive',
+          title: 'Contraseña muy corta',
+          description: 'La contraseña debe tener al menos 8 caracteres.',
+        });
+        return;
+      }
+
+      if (newPassword !== confirmPassword) {
+        toast({
+          variant: 'destructive',
+          title: 'Las contraseñas no coinciden',
+          description: 'Confirma nuevamente la contraseña para continuar.',
+        });
+        return;
+      }
+
+      setIsLoading(true);
+
+      try {
+        const response = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: cleanName,
+            email: cleanEmail,
+            documentType,
+            documentNumber: cleanDocumentNumber,
+            loginId: cleanUsername,
+            phone: cleanPhone,
+            password: newPassword,
+          }),
+        });
+
+        const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+
+        if (!response.ok) {
+          throw new Error(payload?.error || 'No se pudo crear la cuenta.');
+        }
+
+        toast({
+          title: 'Usuario registrado',
+          description: payload?.message || 'La cuenta fue creada correctamente. Ya puedes iniciar sesión.',
+        });
+
+        router.push('/login');
+      } catch (error) {
+        toast({
+          variant: 'destructive',
+          title: 'No se pudo registrar la cuenta',
+          description:
+            error instanceof Error
+              ? error.message
+              : 'Ocurrió un problema al crear el usuario.',
+        });
+      } finally {
+        setIsLoading(false);
+      }
+
+      return;
+    }
 
     if (isPasswordChangeMode) {
       if (!currentUser) {
@@ -258,19 +362,25 @@ function RegisterPageContent() {
 
   const title = isPasswordChangeMode
     ? 'Actualizar contraseña'
-    : 'Restablecer contraseña';
+    : isSignupMode
+      ? 'Crear usuario'
+      : 'Restablecer contraseña';
 
   const description = isPasswordChangeMode
     ? 'Ingresa tu nueva contraseña para continuar'
-    : isEmailResetMode
-      ? 'Define tu nueva contraseña para continuar'
-      : 'Ingresa tus datos para continuar';
+    : isSignupMode
+      ? 'Registra una cuenta nueva para ingresar al portal logístico'
+      : isEmailResetMode
+        ? 'Define tu nueva contraseña para continuar'
+        : 'Ingresa tus datos para continuar';
 
   const buttonText = isPasswordChangeMode || isEmailResetMode
     ? 'Guardar contraseña'
-    : 'Restablecer';
+    : isSignupMode
+      ? 'Crear cuenta'
+      : 'Restablecer';
 
-  const loadingText = isPasswordChangeMode || isEmailResetMode ? 'Guardando' : 'Enviando';
+  const loadingText = isPasswordChangeMode || isEmailResetMode ? 'Guardando' : isSignupMode ? 'Creando' : 'Enviando';
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-slate-100 p-4 font-sans">
@@ -330,7 +440,177 @@ function RegisterPageContent() {
 
             {/* Form */}
             <form onSubmit={handleSubmit} className="mt-8 space-y-5">
-              {isRecoveryRequestMode ? (
+              {isSignupMode ? (
+                <>
+                  <div>
+                    <Label htmlFor="name" className="mb-2 block text-sm font-semibold text-slate-700">
+                      Nombre completo
+                    </Label>
+                    <div className="relative">
+                      <UserIcon className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        id="name"
+                        placeholder="Juan David Perez"
+                        disabled={isLoading}
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        required
+                        className={inputClassName}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="email" className="mb-2 block text-sm font-semibold text-slate-700">
+                      Correo electrónico
+                    </Label>
+                    <div className="relative">
+                      <Mail className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        id="email"
+                        type="email"
+                        placeholder="usuario@empresa.com"
+                        disabled={isLoading}
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value.toLowerCase())}
+                        required
+                        className={inputClassName}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-[140px,1fr]">
+                    <div>
+                      <Label className="mb-2 block text-sm font-semibold text-slate-700">Tipo doc.</Label>
+                      <Select value={documentType} onValueChange={setDocumentType} disabled={isLoading}>
+                        <SelectTrigger className="h-12 rounded-xl border-slate-200 bg-white/95 text-base font-medium text-slate-700">
+                          <SelectValue placeholder="Tipo" />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl border-slate-200">
+                          <SelectItem value="CC">CC</SelectItem>
+                          <SelectItem value="CE">CE</SelectItem>
+                          <SelectItem value="TI">TI</SelectItem>
+                          <SelectItem value="PP">PP</SelectItem>
+                          <SelectItem value="NIT">NIT</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="document-number" className="mb-2 block text-sm font-semibold text-slate-700">
+                        Número de documento
+                      </Label>
+                      <div className="relative">
+                        <IdCard className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+                        <Input
+                          id="document-number"
+                          placeholder="1050067497"
+                          disabled={isLoading}
+                          value={documentNumber}
+                          onChange={(e) => setDocumentNumber(e.target.value.replace(/[^0-9A-Za-z-]/g, ''))}
+                          required
+                          className={inputClassName}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="signup-username" className="mb-2 block text-sm font-semibold text-slate-700">
+                      Usuario de ingreso
+                    </Label>
+                    <div className="relative">
+                      <UserIcon className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        id="signup-username"
+                        placeholder="CC1050067497"
+                        disabled={isLoading}
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value.toUpperCase())}
+                        required
+                        className={inputClassName}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="signup-phone" className="mb-2 block text-sm font-semibold text-slate-700">
+                      Teléfono
+                    </Label>
+                    <div className="relative">
+                      <Smartphone className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        id="signup-phone"
+                        inputMode="numeric"
+                        placeholder="3001234567"
+                        disabled={isLoading}
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value.replace(/[^0-9]/g, ''))}
+                        required
+                        className={inputClassName}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#d8e6ff] bg-gradient-to-r from-[#f4f8ff] to-white px-5 py-4 text-sm text-slate-700 shadow-sm">
+                    La cuenta se registrará inicialmente con rol <span className="font-bold text-[#1d57b7]">certificador</span>. Si requiere más accesos o propietarios, un administrador deberá completarlos después.
+                  </div>
+
+                  <div>
+                    <Label htmlFor="new-password" className="mb-2 block text-sm font-semibold text-slate-700">
+                      Contraseña
+                    </Label>
+                    <div className="relative">
+                      <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        id="new-password"
+                        type={showNewPassword ? 'text' : 'password'}
+                        placeholder="Mínimo 8 caracteres"
+                        disabled={isLoading}
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        required
+                        className={inputClassName}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPassword((value) => !value)}
+                        className="absolute right-2.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-all duration-200 hover:text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-[#1d57b7]/30"
+                        aria-label={showNewPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                      >
+                        {showNewPassword ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="confirm-password" className="mb-2 block text-sm font-semibold text-slate-700">
+                      Confirmar contraseña
+                    </Label>
+                    <div className="relative">
+                      <CheckCircle2 className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
+                      <Input
+                        id="confirm-password"
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        placeholder="Repite tu contraseña"
+                        disabled={isLoading}
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        required
+                        className={inputClassName}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword((value) => !value)}
+                        className="absolute right-2.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-all duration-200 hover:text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-[#1d57b7]/30"
+                        aria-label={showConfirmPassword ? 'Ocultar confirmación de contraseña' : 'Mostrar confirmación de contraseña'}
+                      >
+                        {showConfirmPassword ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : isRecoveryRequestMode ? (
                 <>
                   <div>
                     <Label htmlFor="username" className="mb-2 block text-sm font-semibold text-slate-700">

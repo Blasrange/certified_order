@@ -35,6 +35,8 @@ import {
   Check,
   GitCompare,
   Building2,
+  ScanBarcode,
+  Keyboard,
 } from "lucide-react";
 import {
   Card,
@@ -785,6 +787,7 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
   const [headerData, setHeaderData] = useState({
     name: "",
     type: "Nacional" as "Nacional" | "Exportación",
+    operationMode: "automatic-quantity" as "manual" | "automatic-blind" | "automatic-quantity",
     certificationDate: format(new Date(), 'yyyy-MM-dd'),
     ownerId: owners[0]?.id || "",
     notes: "",
@@ -820,6 +823,7 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
     setHeaderData({
       name: "",
       type: "Nacional",
+      operationMode: "automatic-quantity",
       certificationDate: format(new Date(), 'yyyy-MM-dd'),
       ownerId: owners[0]?.id || "",
       notes: "",
@@ -846,6 +850,7 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
     setHeaderData({
       name: p.name,
       type: p.type,
+      operationMode: p.operationMode || 'automatic-quantity',
       ownerId: p.ownerId || "",
       certificationDate: p.certificationDate,
       notes: p.notes || "",
@@ -1117,6 +1122,12 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
     setSelectedProfileId("");
   };
 
+  const handleResetImportedFile = () => {
+    setFile(null);
+    setPreviewOrdersCount(0);
+    setImportPreviewRows([]);
+  };
+
   const handleDeleteOrder = (orderId: string) => {
     if (!selectedProcessId) return;
     const updated = processes.map(p => {
@@ -1233,7 +1244,19 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                 </div>
               </div>
               <Button 
-                onClick={() => { setEditingProcessId(null); setIsCreateModalOpen(true); }} 
+                onClick={() => {
+                  setEditingProcessId(null);
+                  setHeaderData({
+                    name: "",
+                    type: "Nacional",
+                    operationMode: "automatic-quantity",
+                    certificationDate: format(new Date(), 'yyyy-MM-dd'),
+                    ownerId: owners[0]?.id || "",
+                    notes: "",
+                    hasBalances: false,
+                  });
+                  setIsCreateModalOpen(true);
+                }} 
                 className="bg-gradient-to-r from-[#1d57b7] to-[#1a4a9e] text-white shadow-md shadow-primary/20 gap-2 px-5 rounded-xl h-10 text-sm font-semibold"
               >
                 <PlusCircle className="h-4 w-4" /> Nuevo proceso
@@ -1662,8 +1685,8 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
 
       {/* Modal de creación de proceso - con modal de propietario */}
       <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
-        <DialogContent className="max-w-5xl rounded-2xl p-0 overflow-hidden bg-white shadow-xl">
-          <DialogHeader className="p-6 pb-2">
+        <DialogContent className="flex w-[calc(100vw-1rem)] max-w-5xl flex-col overflow-hidden rounded-2xl bg-white p-0 shadow-xl">
+          <DialogHeader className="shrink-0 p-4 pb-2 sm:px-5 sm:pt-5 sm:pb-2">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-primary/10 rounded-xl text-primary">
                 <PackagePlus className="size-5" />
@@ -1679,24 +1702,25 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
             </div>
           </DialogHeader>
           
-          <div className="px-6 py-4 space-y-4">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="px-4 py-3 sm:px-5 sm:py-4">
+            <div className="space-y-3.5">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-700">Nombre del proceso *</Label>
+                <Label className="text-xs font-semibold text-slate-700">Nombre del proceso <span className="text-red-500">*</span></Label>
                 <Input 
                   value={headerData.name} 
                   onChange={(e) => setHeaderData(f => ({...f, name: e.target.value}))} 
                   placeholder="Ej: Despachos Lunes" 
-                  className="h-11 rounded-xl border-slate-200" 
+                  className="h-10 rounded-xl border-slate-200" 
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-700">Propietario *</Label>
+                <Label className="text-xs font-semibold text-slate-700">Propietario <span className="text-red-500">*</span></Label>
                 <Button 
                   type="button"
                   variant="outline" 
                   onClick={() => setIsOwnerModalOpen(true)}
-                  className="w-full h-11 rounded-xl border-slate-200 bg-white px-4 justify-between hover:bg-slate-50 transition-all shadow-sm"
+                  className="w-full h-10 rounded-xl border-slate-200 bg-white px-4 justify-between hover:bg-slate-50 transition-all shadow-sm"
                 >
                   <div className="flex items-center gap-3">
                     <Briefcase className="size-4 text-primary/70" />
@@ -1708,18 +1732,18 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                 </Button>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-700">Fecha certificación *</Label>
+                <Label className="text-xs font-semibold text-slate-700">Fecha certificación <span className="text-red-500">*</span></Label>
                 <Input 
                   type="date" 
                   value={headerData.certificationDate} 
                   onChange={(e) => setHeaderData(f => ({...f, certificationDate: e.target.value}))} 
-                  className="h-11 rounded-xl" 
+                  className="h-10 rounded-xl" 
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-700">Tipo envío *</Label>
+                <Label className="text-xs font-semibold text-slate-700">Tipo envío <span className="text-red-500">*</span></Label>
                 <Select value={headerData.type} onValueChange={(v: any) => setHeaderData(f => ({...f, type: v}))}>
-                  <SelectTrigger className="h-11 rounded-xl">
+                  <SelectTrigger className="h-10 rounded-xl">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl">
@@ -1729,18 +1753,119 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                 </Select>
               </div>
             </div>
-            <div className="space-y-1.5 md:col-span-2 xl:col-span-3">
+            <div className="rounded-3xl border border-slate-100 bg-[linear-gradient(135deg,_#f8fbff_0%,_#ffffff_48%,_#f8fafc_100%)] p-3.5 shadow-sm">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Modo operativo del proceso <span className="text-red-500">*</span></Label>
+                  <p className="mt-0.5 text-[11px] text-slate-500 sm:text-xs">
+                    Esta configuración se aplicará a todas las certificaciones del proceso y se mantendrá fija durante su operación.
+                  </p>
+                </div>
+                <Badge className="w-fit rounded-full border border-primary/10 bg-primary/5 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-primary">
+                  {headerData.operationMode === 'manual'
+                    ? 'Modo manual fijo'
+                    : headerData.operationMode === 'automatic-blind'
+                      ? 'Automático ciego'
+                      : 'Automático con cantidades'}
+                </Badge>
+              </div>
+
+              <div className="mt-3 grid gap-2.5 md:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => setHeaderData((current) => ({ ...current, operationMode: 'automatic-blind' }))}
+                  className={cn(
+                    "rounded-2xl border p-3 text-left transition-all",
+                    headerData.operationMode === 'automatic-blind'
+                      ? "border-primary bg-white shadow-md shadow-primary/10 ring-2 ring-primary/10"
+                      : "border-slate-200 bg-white/80 hover:border-primary/30"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <div className="mt-0.5 flex size-9 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                        <ScanBarcode className="size-4" />
+                      </div>
+                      <div>
+                        <p className="text-[13px] font-bold text-slate-800">Automático ciego</p>
+                        <p className="mt-0.5 text-[11px] leading-4 text-slate-500">Solo escaneo. No muestra cantidades por SKU durante la operación.</p>
+                      </div>
+                    </div>
+                    <div className={cn(
+                      "mt-0.5 size-3.5 rounded-full border-2 shrink-0",
+                      headerData.operationMode === 'automatic-blind' ? 'border-primary bg-primary' : 'border-slate-300 bg-white'
+                    )} />
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHeaderData((current) => ({ ...current, operationMode: 'automatic-quantity' }))}
+                  className={cn(
+                    "rounded-2xl border p-3 text-left transition-all",
+                    headerData.operationMode === 'automatic-quantity'
+                      ? "border-sky-500 bg-white shadow-md shadow-sky-100 ring-2 ring-sky-100"
+                      : "border-slate-200 bg-white/80 hover:border-sky-300"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <div className="mt-0.5 flex size-9 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
+                        <Package className="size-4" />
+                      </div>
+                      <div>
+                        <p className="text-[13px] font-bold text-slate-800">Automático con cantidades</p>
+                        <p className="mt-0.5 text-[11px] leading-4 text-slate-500">Solo escaneo, pero mostrando cantidades e información del SKU.</p>
+                      </div>
+                    </div>
+                    <div className={cn(
+                      "mt-0.5 size-3.5 rounded-full border-2 shrink-0",
+                      headerData.operationMode === 'automatic-quantity' ? 'border-sky-500 bg-sky-500' : 'border-slate-300 bg-white'
+                    )} />
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHeaderData((current) => ({ ...current, operationMode: 'manual' }))}
+                  className={cn(
+                    "rounded-2xl border p-3 text-left transition-all",
+                    headerData.operationMode === 'manual'
+                      ? "border-emerald-500 bg-white shadow-md shadow-emerald-100 ring-2 ring-emerald-100"
+                      : "border-slate-200 bg-white/80 hover:border-emerald-300"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <div className="mt-0.5 flex size-9 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+                        <Keyboard className="size-4" />
+                      </div>
+                      <div>
+                        <p className="text-[13px] font-bold text-slate-800">Manual</p>
+                        <p className="mt-0.5 text-[11px] leading-4 text-slate-500">La certificación trabajará siempre con digitación manual y validación directa en pantalla.</p>
+                      </div>
+                    </div>
+                    <div className={cn(
+                      "mt-0.5 size-3.5 rounded-full border-2 shrink-0",
+                      headerData.operationMode === 'manual' ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300 bg-white'
+                    )} />
+                  </div>
+                </button>
+              </div>
+            </div>
+            <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-slate-700">Notas / Observaciones</Label>
               <Textarea 
                 placeholder="Detalles adicionales..." 
                 value={headerData.notes} 
                 onChange={(e) => setHeaderData(f => ({...f, notes: e.target.value}))} 
-                className="rounded-xl border-slate-200 min-h-[80px]" 
+                className="rounded-xl border-slate-200 min-h-[64px]" 
               />
+            </div>
             </div>
           </div>
           
-          <DialogFooter className="p-6 bg-slate-50 border-t gap-2">
+          <DialogFooter className="shrink-0 border-t bg-slate-50 p-4 gap-2 sm:px-5 sm:py-4">
             <Button variant="ghost" onClick={() => setIsCreateModalOpen(false)} className="dialog-btn-secondary">
               <X className="size-5" /> Cancelar
             </Button>
@@ -1753,8 +1878,8 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
 
       {/* Modal de importación - con modal de plantilla */}
       <Dialog open={isImportModalOpen} onOpenChange={setIsImportModalOpen}>
-        <DialogContent className="max-w-5xl rounded-2xl p-0 overflow-hidden bg-white shadow-xl">
-          <DialogHeader className="p-6 pb-2">
+        <DialogContent className="max-w-5xl max-h-[88vh] rounded-2xl p-0 overflow-hidden bg-white shadow-xl flex flex-col w-[calc(100vw-1rem)]">
+          <DialogHeader className="shrink-0 p-4 pb-2 sm:px-5 sm:pt-5 sm:pb-2">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-primary/10 rounded-xl text-primary">
                 <FileSpreadsheet className="size-5" />
@@ -1766,14 +1891,15 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
             </div>
           </DialogHeader>
           
-          <div className="px-6 py-4 space-y-4">
-            <div className="space-y-1.5">
+          <div className="px-4 py-3 sm:px-5 sm:py-4 flex-1 overflow-hidden">
+            <div className="space-y-3 h-full min-h-0 flex flex-col">
+            <div className="space-y-1.5 shrink-0">
               <Label className="text-xs font-semibold text-slate-700">Plantilla de homologación</Label>
               <Button 
                 type="button"
                 variant="outline" 
                 onClick={() => setIsProfileModalOpen(true)}
-                className="w-full h-11 rounded-xl border-slate-200 bg-white px-4 justify-between hover:bg-slate-50 transition-all shadow-sm"
+                className="w-full h-10 rounded-xl border-slate-200 bg-white px-4 justify-between hover:bg-slate-50 transition-all shadow-sm"
               >
                 <div className="flex items-center gap-3">
                   <GitCompare className="size-4 text-primary/70" />
@@ -1785,18 +1911,32 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
               </Button>
             </div>
             
-            <div {...getRootProps()} className={cn(
-              "border-2 border-dashed p-8 text-center rounded-xl transition-all cursor-pointer",
-              file ? "border-primary bg-primary/5" : "border-slate-200 bg-slate-50 hover:border-primary/50"
-            )}>
-              <input {...getInputProps()} />
-              <UploadCloud className="size-8 mx-auto text-slate-400 mb-2" />
-              <p className="text-sm font-medium text-slate-600">{file ? file.name : "Arrastra o haz clic para subir"}</p>
-              <p className="text-[10px] text-slate-400 mt-1">.xlsx</p>
-            </div>
+            {!file ? (
+              <div {...getRootProps()} className="shrink-0 border-2 border-dashed border-slate-200 bg-slate-50 hover:border-primary/50 p-6 text-center rounded-xl transition-all cursor-pointer">
+                <input {...getInputProps()} />
+                <UploadCloud className="size-7 mx-auto text-slate-400 mb-2" />
+                <p className="text-sm font-medium text-slate-600">Arrastra o haz clic para subir</p>
+                <p className="text-[10px] text-slate-400 mt-1">.xlsx</p>
+              </div>
+            ) : (
+              <div className="shrink-0 rounded-xl border border-slate-200 bg-slate-50/90 px-4 py-2.5 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <FileSpreadsheet className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-700">{file.name}</p>
+                    <p className="text-[10px] text-slate-400">Archivo cargado correctamente. El área de carga se oculta para dejar más espacio a la validación.</p>
+                  </div>
+                </div>
+                <Button type="button" variant="outline" onClick={handleResetImportedFile} className="h-8 rounded-xl border-slate-200 text-xs font-semibold shrink-0">
+                  Reemplazar archivo
+                </Button>
+              </div>
+            )}
 
             {file && previewOrdersCount > 0 && (
-              <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 flex items-center justify-between">
+              <div className="shrink-0 bg-emerald-50 border border-emerald-100 rounded-xl p-2.5 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <FileCheck2 className="size-4 text-emerald-600" />
                   <span className="text-xs font-semibold text-emerald-700">{previewOrdersCount} pedidos detectados</span>
@@ -1806,7 +1946,7 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
             )}
 
             {file && !selectedProfileId && (
-              <Alert className="rounded-xl bg-amber-50 border-amber-100">
+              <Alert className="shrink-0 rounded-xl bg-amber-50 border-amber-100 py-3">
                 <AlertTriangle className="h-4 w-4 text-amber-500" />
                 <AlertTitle className="text-xs font-bold text-amber-700">Selecciona una plantilla</AlertTitle>
                 <AlertDescription className="text-[10px] text-amber-600">
@@ -1816,8 +1956,8 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
             )}
 
             {importPreviewRows.length > 0 && (
-              <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
-                <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+              <div className="rounded-xl border border-slate-200 overflow-hidden bg-white flex-1 min-h-0 flex flex-col">
+                <div className="px-4 py-2.5 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-3 shrink-0">
                   <div>
                     <p className="text-xs font-bold text-slate-700">Previsualización de validación</p>
                     <p className="text-[10px] text-slate-400">Se muestran las primeras {importPreviewRows.length} filas del archivo con validación de SKU y tienda.</p>
@@ -1827,25 +1967,25 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                     <Badge className="bg-sky-50 text-sky-700 border border-sky-100 shadow-none">Tienda OK: {importPreviewRows.filter((row) => row.storeExists).length}</Badge>
                   </div>
                 </div>
-                <div className="max-h-72 overflow-auto">
+                <div className="flex-1 min-h-[220px] max-h-[42vh] overflow-y-auto overflow-x-auto">
                   <Table>
                     <TableHeader className="bg-slate-50/80 sticky top-0 z-10">
                       <TableRow className="border-b border-slate-100">
-                        <TableHead className="pl-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pedido</TableHead>
-                        <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">NIT</TableHead>
-                        <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tienda Excel</TableHead>
-                        <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Estado tienda</TableHead>
-                        <TableHead className="py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">SKU</TableHead>
-                        <TableHead className="pr-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Estado SKU</TableHead>
+                        <TableHead className="pl-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pedido</TableHead>
+                        <TableHead className="py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">NIT</TableHead>
+                        <TableHead className="py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tienda Excel</TableHead>
+                        <TableHead className="py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Estado tienda</TableHead>
+                        <TableHead className="py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">SKU</TableHead>
+                        <TableHead className="pr-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Estado SKU</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {importPreviewRows.map((row) => (
                         <TableRow key={row.id} className="border-b border-slate-50 align-top">
-                          <TableCell className="pl-4 py-3">
+                          <TableCell className="pl-4 py-2.5">
                             <div className="text-xs font-bold text-slate-700">{row.pedidoId}</div>
                           </TableCell>
-                          <TableCell className="py-3">
+                          <TableCell className="py-2.5">
                             <div className="text-[11px] font-medium text-slate-600">{row.nit}</div>
                             <Badge className={cn(
                               "mt-1 border shadow-none text-[9px] px-2 py-0.5 rounded-full",
@@ -1854,11 +1994,11 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                               {row.customerExists ? 'Cliente OK' : 'Cliente no existe'}
                             </Badge>
                           </TableCell>
-                          <TableCell className="py-3">
+                          <TableCell className="py-2.5">
                             <div className="text-[11px] font-semibold text-slate-700">{row.storeInput || 'S/N'}</div>
                             <div className="text-[10px] text-slate-400 mt-1">{row.storeLabel}</div>
                           </TableCell>
-                          <TableCell className="py-3">
+                          <TableCell className="py-2.5">
                             <Badge className={cn(
                               "border shadow-none text-[9px] px-2 py-0.5 rounded-full",
                               row.storeExists ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-red-50 text-red-700 border-red-100",
@@ -1866,11 +2006,11 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                               {row.storeExists ? 'Tienda OK' : 'Tienda no existe'}
                             </Badge>
                           </TableCell>
-                          <TableCell className="py-3">
+                          <TableCell className="py-2.5">
                             <div className="text-[11px] font-semibold text-slate-700">{row.sku || 'S/N'}</div>
                             <div className="text-[10px] text-slate-400 mt-1">{row.skuLabel}</div>
                           </TableCell>
-                          <TableCell className="pr-4 py-3">
+                          <TableCell className="pr-4 py-2.5">
                             <Badge className={cn(
                               "border shadow-none text-[9px] px-2 py-0.5 rounded-full",
                               row.skuExists ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-red-50 text-red-700 border-red-100",
@@ -1885,9 +2025,10 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                 </div>
               </div>
             )}
+            </div>
           </div>
           
-          <DialogFooter className="p-6 bg-slate-50 border-t gap-2">
+          <DialogFooter className="shrink-0 p-4 sm:px-5 sm:py-4 bg-slate-50 border-t gap-2">
             <Button variant="ghost" onClick={handleCloseImportModal} className="dialog-btn-secondary">
               <X className="size-5" /> Cancelar
             </Button>

@@ -40,6 +40,14 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/auth-context";
 import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
 
+const getCertifiedReferralItems = (order: OrderGroup) =>
+  order.items.filter((item) => Number(item.verifiedQuantity || 0) > 0);
+
+const buildCertifiedReferralOrder = <T extends OrderGroup>(order: T): T => ({
+  ...order,
+  items: getCertifiedReferralItems(order),
+});
+
 const ReferralsPanel = () => {
   const { toast } = useToast();
   const { currentUser } = useAuth();
@@ -107,10 +115,13 @@ const ReferralsPanel = () => {
     }
 
     const exportData = filteredReferrals.flatMap(order => {
-      return order.items.map(item => ({
+      const certifiedItems = getCertifiedReferralItems(order);
+
+      return certifiedItems.map(item => ({
         "Proceso Maestro": order.processName,
         "ID Pedido / PO": order.id,
         "N° Orden": order.orderNumber,
+        "Usuario Certificador": order.certifiedByName || order.certifiedByUserId || "N/A",
         "NIT Cliente": order.nit,
         "Nombre Cliente": order.customerName,
         "Punto Entrega": order.storeName,
@@ -131,9 +142,9 @@ const ReferralsPanel = () => {
     const ws = XLSX.utils.json_to_sheet(exportData);
     
     const wscols = [
-      { wch: 25 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 30 },
-      { wch: 25 }, { wch: 15 }, { wch: 15 }, { wch: 35 }, { wch: 15 },
-      { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 20 }
+      { wch: 25 }, { wch: 15 }, { wch: 15 }, { wch: 24 }, { wch: 15 },
+      { wch: 30 }, { wch: 25 }, { wch: 15 }, { wch: 15 }, { wch: 35 },
+      { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 20 }
     ];
     ws['!cols'] = wscols;
 
@@ -275,7 +286,7 @@ const ReferralsPanel = () => {
                             title="Vista Previa de Pedido"
                             className="h-8 w-8 rounded-lg text-primary hover:bg-primary/10"
                             onClick={() => {
-                              setSelectedOrder(order);
+                              setSelectedOrder(buildCertifiedReferralOrder(order));
                               setIsPreviewOpen(true);
                             }}
                           >
@@ -299,7 +310,7 @@ const ReferralsPanel = () => {
                             title="Remisión de Despacho"
                             className="h-8 w-8 rounded-lg text-slate-600 hover:bg-slate-100"
                             onClick={() => {
-                              setSelectedOrder(order);
+                              setSelectedOrder(buildCertifiedReferralOrder(order));
                               setIsPrintOpen(true);
                             }}
                           >

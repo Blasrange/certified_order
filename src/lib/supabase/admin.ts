@@ -3,7 +3,6 @@ import "server-only";
 import { createClient } from "@supabase/supabase-js";
 
 import {
-  getSupabaseAnonKey,
   getSupabaseEnvStatus,
   getSupabasePublicUrl,
 } from "@/lib/env";
@@ -19,11 +18,13 @@ export type SupabaseAuditActor = {
 const getServerKey = () => {
   const env = getSupabaseEnvStatus();
 
-  if (env.hasServiceRoleKey && !env.serviceRoleKeyIsPlaceholder) {
-    return env.serviceRoleKey;
+  if (!env.hasServiceRoleKey || env.serviceRoleKeyIsPlaceholder) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY no esta configurada con un valor real. Las rutas de servidor que cargan o sincronizan datos requieren esta clave."
+    );
   }
 
-  return getSupabaseAnonKey();
+  return env.serviceRoleKey;
 };
 
 const buildAuditHeaders = (actor?: SupabaseAuditActor) => {

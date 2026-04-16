@@ -252,6 +252,13 @@ export default function LoginPage() {
                 </Link>
               </div>
 
+              <Link
+                href="/register?mode=signup"
+                className="flex h-12 w-full items-center justify-center rounded-xl border border-[#1d57b7]/15 bg-[#f4f8ff] text-base font-semibold text-[#1d57b7] transition-all duration-200 hover:border-[#1d57b7]/30 hover:bg-white"
+              >
+                Crear usuario nuevo
+              </Link>
+
               <Button type="submit" className={primaryButtonClassName} disabled={isSubmitting}>
                 {isSubmitting ? (
                   <span className="flex items-center justify-center gap-2">

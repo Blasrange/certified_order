@@ -290,20 +290,13 @@ export const verifyRecoveryToken = (token: string): RecoveryPayload => {
 
 export const findRecoveryUserByLoginId = async (loginId: string): Promise<RecoveryUser | null> => {
   const cleanLoginId = loginId.trim().toUpperCase();
-  const env = getSupabaseEnvStatus();
 
   if (!cleanLoginId) {
     return null;
   }
 
-  if (!env.hasUrl || env.urlIsPlaceholder || !env.hasServiceRoleKey || env.serviceRoleKeyIsPlaceholder) {
-    throw new Error('Supabase no está configurado para consultar usuarios de recuperación.');
-  }
-
   const { data, error } = await supabaseAdmin
-    .from('app_users')
-    .select('id, login_id, email, phone, name, is_active')
-    .eq('login_id', cleanLoginId)
+    .rpc('get_portal_recovery_user', { p_login_id: cleanLoginId })
     .maybeSingle();
 
   if (error) {
@@ -332,9 +325,7 @@ const findAuthenticatedUserByLoginId = async (loginId: string): Promise<Authenti
   }
 
   const { data: user, error } = await supabaseAdmin
-    .from('app_users')
-    .select('id, user_code, login_id, email, phone, name, is_active, role_id, avatar_url, document_type, document_number, otp_method, is_first_login, password_hash')
-    .eq('login_id', cleanLoginId)
+    .rpc('get_portal_auth_user', { p_login_id: cleanLoginId })
     .maybeSingle();
 
   if (error) {
@@ -343,26 +334,6 @@ const findAuthenticatedUserByLoginId = async (loginId: string): Promise<Authenti
 
   if (!user) {
     return null;
-  }
-
-  const [{ data: role, error: roleError }, { data: ownerAccess, error: ownerAccessError }] = await Promise.all([
-    supabaseAdmin
-      .from('app_roles')
-      .select('id, role_code, name')
-      .eq('id', user.role_id)
-      .maybeSingle(),
-    supabaseAdmin
-      .from('user_owner_access')
-      .select('owner_id, owners(owner_code)')
-      .eq('user_id', user.id),
-  ]);
-
-  if (roleError) {
-    throw new Error(`No se pudo consultar el rol del usuario: ${roleError.message}`);
-  }
-
-  if (ownerAccessError) {
-    throw new Error(`No se pudo consultar los propietarios del usuario: ${ownerAccessError.message}`);
   }
 
   return {
@@ -374,18 +345,15 @@ const findAuthenticatedUserByLoginId = async (loginId: string): Promise<Authenti
     name: user.name,
     isActive: user.is_active,
     roleId: user.role_id,
-    roleCode: role?.role_code || null,
-    roleName: role?.name || null,
+    roleCode: user.role_code || null,
+    roleName: user.role_name || null,
     avatarUrl: user.avatar_url || null,
     documentType: user.document_type || null,
     documentNumber: user.document_number || null,
     otpMethod: user.otp_method || 'email',
     isFirstLogin: user.is_first_login,
     passwordHash: user.password_hash || null,
-    ownerIds: (ownerAccess || []).map((row) => {
-      const owner = Array.isArray(row.owners) ? row.owners[0] : row.owners;
-      return owner?.owner_code ? String(owner.owner_code) : String(row.owner_id);
-    }),
+    ownerIds: Array.isArray(user.owner_ids) ? user.owner_ids.map((value) => String(value)) : [],
   };
 };
 
@@ -434,18 +402,15 @@ export const authenticateUserCredentials = async ({
 
   if (!isStructuredPasswordHash(user.passwordHash)) {
     const upgradedHash = await hashPassword(password);
-    const db = buildRecoveryActorClient({
-      appUserId: user.id,
-      loginId: user.loginId,
-      userEmail: user.email,
+
+    const { data: updated, error } = await supabaseAdmin.rpc('update_portal_user_password', {
+      p_login_id: user.loginId,
+      p_email: user.email,
+      p_password_hash: upgradedHash,
+      p_is_first_login: user.isFirstLogin ?? false,
     });
 
-    const { error } = await db
-      .from('app_users')
-      .update({ password_hash: upgradedHash })
-      .eq('id', user.id);
-
-    if (error) {
+    if (error || !updated) {
       throw new Error(`No se pudo actualizar la seguridad de la cuenta: ${error.message}`);
     }
   }
@@ -517,6 +482,65 @@ const getMailerConfig = () => {
   };
 };
 
+const buildEmailTemplate = ({
+  eyebrow,
+  title,
+  intro,
+  outro,
+  ctaLabel,
+  ctaUrl,
+  highlightRows = [],
+}: {
+  eyebrow: string;
+  title: string;
+  intro: string;
+  outro: string;
+  ctaLabel: string;
+  ctaUrl: string;
+  highlightRows?: Array<{ label: string; value: string }>;
+}) => {
+  const rowsMarkup = highlightRows.length
+    ? `
+      <div style="margin:24px 0;padding:18px;border:1px solid #dbeafe;border-radius:20px;background:linear-gradient(180deg,#f8fbff 0%,#eef6ff 100%);">
+        ${highlightRows
+          .map(
+            ({ label, value }) => `
+              <div style="display:flex;justify-content:space-between;gap:16px;padding:${highlightRows[0]?.label === label ? '0 0 12px' : '12px 0'};${highlightRows[highlightRows.length - 1]?.label === label ? '' : 'border-bottom:1px solid #dbeafe;'}">
+                <span style="font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">${label}</span>
+                <span style="font-size:14px;font-weight:700;color:#0f172a;text-align:right;">${value}</span>
+              </div>
+            `
+          )
+          .join('')}
+      </div>
+    `
+    : '';
+
+  return `
+    <div style="margin:0;padding:32px 16px;background:#f8fafc;font-family:Inter,Arial,sans-serif;color:#0f172a;">
+      <div style="max-width:640px;margin:0 auto;border:1px solid #e2e8f0;border-radius:28px;overflow:hidden;background:#ffffff;box-shadow:0 24px 60px rgba(15,23,42,0.12);">
+        <div style="padding:32px;background:linear-gradient(135deg,#eff6ff 0%,#ffffff 62%,#f8fafc 100%);border-bottom:1px solid #e2e8f0;">
+          <div style="display:inline-block;padding:8px 14px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-size:11px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">${eyebrow}</div>
+          <h1 style="margin:18px 0 10px;font-size:30px;line-height:1.1;font-weight:800;color:#0f172a;">${title}</h1>
+          <p style="margin:0;font-size:15px;line-height:1.7;color:#475569;">${intro}</p>
+          ${rowsMarkup}
+          <div style="margin-top:26px;">
+            <a href="${ctaUrl}" style="display:inline-block;padding:14px 22px;border-radius:16px;background:linear-gradient(135deg,#2563eb 0%,#3b82f6 100%);color:#ffffff;text-decoration:none;font-size:14px;font-weight:800;box-shadow:0 14px 30px rgba(37,99,235,0.28);">
+              ${ctaLabel}
+            </a>
+          </div>
+        </div>
+        <div style="padding:24px 32px 32px;">
+          <div style="padding:16px 18px;border-radius:18px;background:#f8fafc;border:1px solid #e2e8f0;">
+            <p style="margin:0;font-size:13px;line-height:1.7;color:#475569;">${outro}</p>
+          </div>
+          <p style="margin:20px 0 0;font-size:12px;line-height:1.7;color:#94a3b8;">Portal Certificados</p>
+        </div>
+      </div>
+    </div>
+  `;
+};
+
 export const sendRecoveryEmail = async ({
   userId,
   to,
@@ -529,21 +553,16 @@ export const sendRecoveryEmail = async ({
   resetUrl: string;
 }) => {
   const mailer = getMailerConfig();
-  const subject = 'Recuperacion de contrasena';
-  const bodyText = `Hola ${name},\n\nRecibimos una solicitud para restablecer tu contraseña. Usa este enlace para continuar:\n${resetUrl}\n\nSi no solicitaste este cambio, puedes ignorar este correo.`;
-  const bodyHtml = `
-      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
-        <h2 style="margin-bottom: 8px;">Recuperación de contraseña</h2>
-        <p>Hola ${name},</p>
-        <p>Recibimos una solicitud para restablecer tu contraseña en el Portal de Certificación Logística.</p>
-        <p>
-          <a href="${resetUrl}" style="display:inline-block;padding:12px 18px;border-radius:12px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;">
-            Restablecer contraseña
-          </a>
-        </p>
-        <p>Si no solicitaste este cambio, puedes ignorar este correo.</p>
-      </div>
-    `;
+  const subject = 'Recupera tu acceso al portal';
+  const bodyText = `Hola ${name},\n\nRecibimos una solicitud para restablecer tu contraseña en Portal Certificados.\n\nUsa este enlace para continuar:\n${resetUrl}\n\nSi no solicitaste este cambio, puedes ignorar este mensaje con tranquilidad.`;
+  const bodyHtml = buildEmailTemplate({
+    eyebrow: 'Recuperación',
+    title: `Hola ${name}, recupera tu acceso`,
+    intro: 'Recibimos una solicitud para restablecer tu contraseña. Usa el botón de abajo para crear una nueva clave y volver a ingresar al portal de forma segura.',
+    outro: 'Si no solicitaste este cambio, puedes ignorar este mensaje. Tu cuenta seguirá protegida y no se aplicará ninguna modificación hasta que completes el proceso.',
+    ctaLabel: 'Restablecer contraseña',
+    ctaUrl: resetUrl,
+  });
 
   let emailMessageId: number | undefined;
 
@@ -633,23 +652,20 @@ export const sendUserWelcomeEmail = async ({
   loginUrl: string;
 }) => {
   const mailer = getMailerConfig();
-  const subject = 'Acceso inicial al sistema de certificacion';
-  const bodyText = `Hola ${name},\n\nTu cuenta fue creada correctamente.\n\nUsuario: ${loginId}\nContraseña temporal: ${temporaryPassword}\n\nIngresa al portal y cambia tu contraseña en el primer acceso:\n${loginUrl}\n\nSi no reconoces este mensaje, comunícate con el administrador.`;
-  const bodyHtml = `
-      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
-        <h2 style="margin-bottom: 8px;">Cuenta creada correctamente</h2>
-        <p>Hola ${name},</p>
-        <p>Tu usuario fue creado en el Portal de Certificación Logística.</p>
-        <p><strong>Usuario:</strong> ${loginId}</p>
-        <p><strong>Contraseña temporal:</strong> ${temporaryPassword}</p>
-        <p>En tu primer ingreso el sistema te pedirá actualizar la contraseña.</p>
-        <p>
-          <a href="${loginUrl}" style="display:inline-block;padding:12px 18px;border-radius:12px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;">
-            Ingresar al portal
-          </a>
-        </p>
-      </div>
-    `;
+  const subject = 'Tu acceso inicial está listo';
+  const bodyText = `Hola ${name},\n\nTu cuenta fue creada correctamente en Portal Certificados.\n\nUsuario: ${loginId}\nContraseña temporal: ${temporaryPassword}\n\nIngresa al portal desde este enlace:\n${loginUrl}\n\nPor seguridad, en el primer acceso deberás cambiar la contraseña. Si no reconoces este mensaje, comunícate con el administrador.`;
+  const bodyHtml = buildEmailTemplate({
+    eyebrow: 'Nuevo acceso',
+    title: `Hola ${name}, tu cuenta ya está lista`,
+    intro: 'Tu usuario fue creado correctamente en Portal Certificados. A continuación encontrarás tus datos de acceso temporal para ingresar por primera vez.',
+    outro: 'Por seguridad, en tu primer ingreso el sistema te pedirá actualizar la contraseña. Si no reconoces este mensaje, comunícate con el administrador del portal.',
+    ctaLabel: 'Ingresar al portal',
+    ctaUrl: loginUrl,
+    highlightRows: [
+      { label: 'Usuario', value: loginId },
+      { label: 'Contraseña temporal', value: temporaryPassword },
+    ],
+  });
 
   let emailMessageId: number | undefined;
 
@@ -746,21 +762,15 @@ export const changePasswordForUser = async ({
   }
 
   const passwordHash = await hashPassword(password);
-  const db = buildRecoveryActorClient({
-    appUserId: user.id,
-    loginId: user.loginId,
-    userEmail: user.email,
+
+  const { data: updated, error } = await supabaseAdmin.rpc('update_portal_user_password', {
+    p_login_id: user.loginId,
+    p_email: user.email,
+    p_password_hash: passwordHash,
+    p_is_first_login: false,
   });
 
-  const { error } = await db
-    .from('app_users')
-    .update({
-      password_hash: passwordHash,
-      is_first_login: false,
-    })
-    .eq('id', user.id);
-
-  if (error) {
+  if (error || !updated) {
     throw new Error(`No se pudo actualizar la contraseña: ${error.message}`);
   }
 
@@ -786,22 +796,15 @@ export const updatePasswordFromRecovery = async ({
   }
 
   const user = await findRecoveryUserByLoginId(loginId);
-  const db = buildRecoveryActorClient({
-    appUserId: user?.id || null,
-    loginId,
-    userEmail: email,
+
+  const { data: updated, error } = await supabaseAdmin.rpc('update_portal_user_password', {
+    p_login_id: loginId,
+    p_email: email,
+    p_password_hash: await hashPassword(password),
+    p_is_first_login: false,
   });
 
-  const { error } = await db
-    .from('app_users')
-    .update({
-      password_hash: await hashPassword(password),
-      is_first_login: false,
-    })
-    .eq('login_id', loginId)
-    .eq('email', email);
-
-  if (error) {
+  if (error || !updated) {
     throw new Error(`No se pudo actualizar la contraseña: ${error.message}`);
   }
 };

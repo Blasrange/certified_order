@@ -51,6 +51,8 @@ export type OrderItem = {
   productCode: string;
   description: string;
   batch: string;
+  enteredBatch?: string;
+  batchValidationStatus?: 'pending' | 'matched' | 'mismatch';
   expiryDate: string; 
   productionDate: string;
   quantity: number;
@@ -87,6 +89,9 @@ export type OrderGroup = {
   assignedTo?: string[];
   isFinalized?: boolean;
   finalizedAt?: string;
+  certificationSignature?: string;
+  certifiedByUserId?: string;
+  certifiedByName?: string;
   ownerId?: string;
 };
 
@@ -95,6 +100,7 @@ export type GroupedOrder = {
   dbId?: string;
   name: string;
   type: 'Nacional' | 'Exportación';
+  operationMode: 'manual' | 'automatic-blind' | 'automatic-quantity';
   certificationDate: string;
   ownerId?: string;
   notes: string;

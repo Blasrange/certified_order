@@ -378,6 +378,7 @@ create table if not exists public.certification_processes (
   created_by_user_id bigint references public.app_users(id) on delete set null,
   name text not null,
   process_type text not null,
+  operation_mode text not null default 'automatic-quantity' check (operation_mode in ('manual', 'automatic-blind', 'automatic-quantity')),
   certification_date date not null,
   notes text not null default '',
   has_balances boolean not null default false,
@@ -456,6 +457,36 @@ create table if not exists public.order_box_items (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+alter table if exists public.process_orders
+  add column if not exists certification_signature text,
+  add column if not exists certified_by_user_id bigint references public.app_users(id) on delete set null,
+  add column if not exists certified_by_name text;
+
+alter table if exists public.certification_processes
+  add column if not exists operation_mode text not null default 'automatic-quantity';
+
+alter table if exists public.certification_processes
+  drop constraint if exists certification_processes_operation_mode_check;
+
+update public.certification_processes
+set operation_mode = 'automatic-quantity'
+where operation_mode = 'automatic';
+
+alter table if exists public.certification_processes
+  add constraint certification_processes_operation_mode_check
+  check (operation_mode in ('manual', 'automatic-blind', 'automatic-quantity'));
+
+alter table if exists public.order_items
+  add column if not exists entered_batch text,
+  add column if not exists batch_validation_status text not null default 'pending';
+
+alter table if exists public.order_items
+  drop constraint if exists order_items_batch_validation_status_check;
+
+alter table if exists public.order_items
+  add constraint order_items_batch_validation_status_check
+  check (batch_validation_status in ('pending', 'matched', 'mismatch'));
+
 create table if not exists public.system_change_log (
   id bigint generated always as identity primary key,
   schema_name text not null,
@@ -469,6 +500,240 @@ create table if not exists public.system_change_log (
   new_data jsonb,
   changed_at timestamptz not null default timezone('utc', now())
 );
+
+create or replace function public.register_portal_user(
+  p_name text,
+  p_email text,
+  p_document_type text,
+  p_document_number text,
+  p_login_id text,
+  p_phone text,
+  p_password_hash text
+)
+returns table (
+  user_id bigint,
+  user_code text,
+  login_id text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_name text := trim(coalesce(p_name, ''));
+  v_email text := lower(trim(coalesce(p_email, '')));
+  v_document_type text := upper(trim(coalesce(p_document_type, '')));
+  v_document_number text := trim(coalesce(p_document_number, ''));
+  v_login_id text := upper(trim(coalesce(p_login_id, '')));
+  v_phone text := regexp_replace(coalesce(p_phone, ''), '\D', '', 'g');
+  v_password_hash text := trim(coalesce(p_password_hash, ''));
+  v_role_id bigint;
+  v_inserted_id bigint;
+  v_user_code text;
+begin
+  if v_name = '' or v_email = '' or v_document_type = '' or v_document_number = '' or v_login_id = '' or v_phone = '' or v_password_hash = '' then
+    raise exception 'Debes completar todos los campos obligatorios para crear la cuenta.';
+  end if;
+
+  if length(v_phone) < 10 then
+    raise exception 'El teléfono debe tener al menos 10 dígitos.';
+  end if;
+
+  select id
+  into v_role_id
+  from public.app_roles
+  where public.app_roles.role_code = 'certificador'
+  limit 1;
+
+  if v_role_id is null then
+    raise exception 'No existe el rol certificador en la base de datos.';
+  end if;
+
+  if exists (
+    select 1
+    from public.app_users as au
+    where lower(au.email) = v_email
+  ) then
+    raise exception 'El correo electrónico ya está registrado.';
+  end if;
+
+  if exists (
+    select 1
+    from public.app_users as au
+    where upper(au.login_id) = v_login_id
+  ) then
+    raise exception 'El usuario de ingreso ya existe.';
+  end if;
+
+  if exists (
+    select 1
+    from public.app_users as au
+    where au.document_number = v_document_number
+  ) then
+    raise exception 'El número de documento ya se encuentra registrado.';
+  end if;
+
+  v_user_code := 'USR-' || to_char(timezone('utc', now()), 'YYYYMMDDHH24MISSMS');
+
+  insert into public.app_users (
+    user_code,
+    role_id,
+    name,
+    email,
+    avatar_url,
+    password_hash,
+    document_type,
+    document_number,
+    login_id,
+    phone,
+    otp_method,
+    is_active,
+    is_first_login
+  )
+  values (
+    v_user_code,
+    v_role_id,
+    v_name,
+    v_email,
+    null,
+    v_password_hash,
+    v_document_type,
+    v_document_number,
+    v_login_id,
+    v_phone,
+    'email',
+    true,
+    false
+  )
+  returning id into v_inserted_id;
+
+  return query
+  select
+    v_inserted_id as user_id,
+    v_user_code as user_code,
+    v_login_id as login_id;
+end;
+$$;
+
+create or replace function public.get_portal_recovery_user(
+  p_login_id text
+)
+returns table (
+  id bigint,
+  login_id text,
+  email text,
+  phone text,
+  name text,
+  is_active boolean
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    u.id,
+    u.login_id,
+    u.email,
+    u.phone,
+    u.name,
+    u.is_active
+  from public.app_users u
+  where upper(u.login_id) = upper(trim(coalesce(p_login_id, '')))
+  limit 1;
+$$;
+
+create or replace function public.get_portal_auth_user(
+  p_login_id text
+)
+returns table (
+  id bigint,
+  user_code text,
+  login_id text,
+  email text,
+  phone text,
+  name text,
+  is_active boolean,
+  role_id bigint,
+  role_code text,
+  role_name text,
+  avatar_url text,
+  document_type text,
+  document_number text,
+  otp_method text,
+  is_first_login boolean,
+  password_hash text,
+  owner_ids text[]
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    u.id,
+    u.user_code,
+    u.login_id,
+    u.email,
+    u.phone,
+    u.name,
+    u.is_active,
+    u.role_id,
+    r.role_code,
+    r.name as role_name,
+    u.avatar_url,
+    u.document_type,
+    u.document_number,
+    u.otp_method,
+    u.is_first_login,
+    u.password_hash,
+    coalesce(
+      array(
+        select coalesce(o.owner_code, ua.owner_id::text)
+        from public.user_owner_access ua
+        left join public.owners o on o.id = ua.owner_id
+        where ua.user_id = u.id
+        order by ua.owner_id
+      ),
+      '{}'::text[]
+    ) as owner_ids
+  from public.app_users u
+  left join public.app_roles r on r.id = u.role_id
+  where upper(u.login_id) = upper(trim(coalesce(p_login_id, '')))
+  limit 1;
+$$;
+
+create or replace function public.update_portal_user_password(
+  p_login_id text,
+  p_email text,
+  p_password_hash text,
+  p_is_first_login boolean default false
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_updated_rows bigint;
+begin
+  update public.app_users u
+  set
+    password_hash = trim(coalesce(p_password_hash, '')),
+    is_first_login = p_is_first_login
+  where upper(u.login_id) = upper(trim(coalesce(p_login_id, '')))
+    and (
+      nullif(trim(coalesce(p_email, '')), '') is null
+      or lower(u.email) = lower(trim(coalesce(p_email, '')))
+    );
+
+  get diagnostics v_updated_rows = row_count;
+  return v_updated_rows > 0;
+end;
+$$;
+
+grant execute on function public.register_portal_user(text, text, text, text, text, text, text) to anon, authenticated, service_role;
+grant execute on function public.get_portal_recovery_user(text) to anon, authenticated, service_role;
+grant execute on function public.get_portal_auth_user(text) to anon, authenticated, service_role;
+grant execute on function public.update_portal_user_password(text, text, text, boolean) to anon, authenticated, service_role;
 
 create index if not exists idx_owners_owner_code on public.owners(owner_code);
 create index if not exists idx_customers_owner_id on public.customers(owner_id);

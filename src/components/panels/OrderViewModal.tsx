@@ -87,11 +87,11 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-[90vw] w-[1100px] max-h-[85vh] flex flex-col p-0 overflow-hidden border border-slate-100 shadow-2xl rounded-2xl bg-white">
+      <DialogContent className="flex max-h-[92vh] w-[min(100vw-1rem,72rem)] max-w-[72rem] flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white p-0 shadow-[0_24px_60px_rgba(15,23,42,0.18)]">
         
         {/* Header - consistente con OrdersPanel */}
-        <DialogHeader className="p-6 pb-4 bg-white border-b border-slate-100 shrink-0">
-          <div className="flex justify-between items-start gap-6">
+        <DialogHeader className="shrink-0 space-y-4 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="space-y-3 flex-1">
               <div className="flex items-center gap-3">
                 <div className="size-11 rounded-xl bg-gradient-to-br from-[#1d57b7]/10 to-[#3b82f6]/10 flex items-center justify-center text-primary">
@@ -110,7 +110,7 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
               </div>
               
               {/* Info de cliente y tienda - estilo consistente */}
-              <div className="flex items-center gap-6 pl-1">
+              <div className="flex flex-col gap-4 pl-1 sm:flex-row sm:items-center sm:gap-6">
                 <div className="flex items-center gap-2">
                   <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
                     <Building2 className="size-3.5" />
@@ -122,7 +122,7 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
                   </div>
                 </div>
                 
-                <div className="w-px h-7 bg-slate-200" />
+                <div className="hidden h-7 w-px bg-slate-200 sm:block" />
                 
                 <div className="flex items-center gap-2">
                   <div className="p-1.5 bg-slate-100 rounded-lg text-slate-400">
@@ -130,7 +130,7 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
                   </div>
                   <div>
                     <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Punto de venta</p>
-                    <p className="text-xs font-bold text-slate-700 truncate max-w-[200px]">{orderGroup.storeName}</p>
+                    <p className="max-w-[260px] truncate text-xs font-bold text-slate-700">{orderGroup.storeName}</p>
                     <p className="text-[9px] font-mono text-slate-400">Cód: {orderGroup.storeCode}</p>
                   </div>
                 </div>
@@ -138,26 +138,32 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
             </div>
 
             {/* Panel de estadísticas - estilo consistente con las cards */}
-            <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100 shrink-0">
+            <div className="grid shrink-0 grid-cols-3 gap-0 overflow-hidden rounded-xl border border-slate-100 bg-slate-50 xl:min-w-[270px]">
               <div className="text-center px-3">
-                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Cajas</p>
-                <p className="text-xl font-bold text-primary">{orderGroup.totalBoxes}</p>
-              </div>
-              <div className="w-px h-8 bg-slate-200" />
-              <div className="text-center px-3">
-                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Unidades</p>
-                <div className="flex items-baseline gap-0.5">
-                  <span className="text-xl font-bold text-emerald-600">{verifiedTotal}</span>
-                  <span className="text-xs font-semibold text-slate-300">/{requestedTotal}</span>
+                <div className="px-3 py-3">
+                  <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Cajas</p>
+                  <p className="text-xl font-bold text-primary">{orderGroup.totalBoxes}</p>
                 </div>
               </div>
-              <div className="w-px h-8 bg-slate-200" />
-              <div className="text-center px-3">
-                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Estado</p>
-                <Badge className={cn("text-[9px] font-bold px-2.5 py-0.5 rounded-full gap-1 border", getStatusColor())}>
-                  {getStatusIcon()}
-                  <span>{getStatusText()}</span>
-                </Badge>
+              <div className="border-l border-slate-200 text-center px-3">
+                <div className="px-3 py-3">
+                  <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Unidades</p>
+                  <div className="flex items-baseline justify-center gap-0.5">
+                    <span className="text-xl font-bold text-emerald-600">{verifiedTotal}</span>
+                    <span className="text-xs font-semibold text-slate-300">/{requestedTotal}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="border-l border-slate-200 text-center px-3">
+                <div className="px-3 py-3">
+                  <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Estado</p>
+                  <div className="mt-1 flex justify-center">
+                    <Badge className={cn("text-[9px] font-bold px-2.5 py-0.5 rounded-full gap-1 border", getStatusColor())}>
+                      {getStatusIcon()}
+                      <span>{getStatusText()}</span>
+                    </Badge>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -178,11 +184,12 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
         </DialogHeader>
 
         {/* Cuerpo del Modal - Tabla consistente con OrdersPanel */}
-        <div className="flex-1 overflow-hidden flex flex-col p-6 gap-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-4 py-4 sm:px-6 sm:py-5">
           {/* Tabla de items */}
           <Card className="border border-slate-100 shadow-sm rounded-xl overflow-hidden bg-white flex flex-col flex-1">
             <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
               <ScrollArea className="flex-1">
+                <div className="min-w-[940px]">
                 <Table>
                   <TableHeader className="bg-slate-50/80 sticky top-0 z-10">
                     <TableRow className="border-b border-slate-100">
@@ -254,6 +261,7 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
                     })}
                   </TableBody>
                 </Table>
+                </div>
               </ScrollArea>
             </CardContent>
           </Card>
@@ -273,7 +281,7 @@ const OrderViewModal: React.FC<OrderViewModalProps> = ({
           </Card>
           
           {/* Botón cerrar - consistente con los botones del sistema */}
-          <div className="flex justify-end items-center shrink-0 mt-2">
+          <div className="mt-1 flex shrink-0 items-center justify-end">
             <Button 
               onClick={onClose} 
               className="dialog-btn-secondary"

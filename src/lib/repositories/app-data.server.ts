@@ -299,6 +299,8 @@ const buildGroupedProcesses = (
       productCode: item.product_code,
       description: item.description,
       batch: item.batch,
+      enteredBatch: item.entered_batch || undefined,
+      batchValidationStatus: item.batch_validation_status || undefined,
       expiryDate: item.expiry_date || "",
       productionDate: item.production_date || "",
       quantity: Number(item.quantity || 0),
@@ -335,6 +337,9 @@ const buildGroupedProcesses = (
       assignedTo: assignmentsByOrderId.get(order.id) || [],
       isFinalized: order.is_finalized,
       finalizedAt: order.finalized_at || undefined,
+      certificationSignature: order.certification_signature || undefined,
+      certifiedByUserId: order.certified_by_user_id ? userCodeByDbId.get(String(order.certified_by_user_id)) || String(order.certified_by_user_id) : undefined,
+      certifiedByName: order.certified_by_name || undefined,
       ownerId: order.owner_id ? ownerCodeById.get(String(order.owner_id)) || String(order.owner_id) : undefined,
     });
     ordersByProcessId.set(order.process_id, current);
@@ -347,6 +352,12 @@ const buildGroupedProcesses = (
     dbId: String(process.id),
     name: process.name,
     type: process.process_type,
+    operationMode:
+      process.operation_mode === "manual"
+        ? "manual"
+        : process.operation_mode === "automatic-blind"
+          ? "automatic-blind"
+          : "automatic-quantity",
     certificationDate: process.certification_date,
     ownerId: process.owner_id ? ownerCodeById.get(String(process.owner_id)) || String(process.owner_id) : undefined,
     notes: process.notes,
@@ -1231,6 +1242,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
       created_by_user_id: process.createdBy?.id ? userRowsByKey.get(process.createdBy.id)?.id || null : null,
       name: process.name,
       process_type: process.type,
+      operation_mode: process.operationMode,
       certification_date: process.certificationDate,
       notes: process.notes,
       has_balances: process.hasBalances,
@@ -1295,6 +1307,9 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
         status: order.status,
         is_finalized: order.isFinalized || false,
         finalized_at: order.finalizedAt || null,
+        certification_signature: order.certificationSignature || null,
+        certified_by_user_id: order.certifiedByUserId ? userRowsByKey.get(order.certifiedByUserId)?.id || null : null,
+        certified_by_name: order.certifiedByName || null,
       },
     }))
   ).filter((row) => row.payload.process_id != null);
@@ -1354,6 +1369,8 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
           product_code: item.productCode,
           description: item.description,
           batch: item.batch,
+          entered_batch: item.enteredBatch || null,
+          batch_validation_status: item.batchValidationStatus || 'pending',
           expiry_date: item.expiryDate,
           production_date: item.productionDate,
           quantity: item.quantity,
