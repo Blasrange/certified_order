@@ -68,7 +68,7 @@ const OwnerForm = ({ owner, onSave, onCancel }: { owner: Partial<Owner> | null, 
             id="name" 
             value={formData.name || ''} 
             onChange={handleChange} 
-            placeholder="Ej: Corporación Colombiana de Logística SAS"
+            placeholder="Ej: Empresa de ejemplo SAS"
             className="rounded-xl h-11 text-sm font-medium bg-white border-slate-200" 
             required 
           />
@@ -91,7 +91,7 @@ const OwnerForm = ({ owner, onSave, onCancel }: { owner: Partial<Owner> | null, 
             type="email" 
             value={formData.email || ''} 
             onChange={handleChange} 
-            placeholder="Ej: contacto@cclogistica.com"
+            placeholder="Ej: contacto@empresa.com"
             className="rounded-xl h-11 text-sm font-medium bg-white border-slate-200" 
             required 
           />

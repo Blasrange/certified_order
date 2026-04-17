@@ -402,7 +402,7 @@ function RegisterPageContent() {
                 <div className="flex size-10 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm shadow-sm">
                   <AppLogo className="size-6 text-white" />
                 </div>
-                <span className="text-sm font-semibold tracking-wide text-white/80">CCL</span>
+                <span className="text-sm font-semibold tracking-wide text-white/80">Portal</span>
               </div>
               <h1 className="text-3xl font-bold leading-tight tracking-tight xl:text-4xl">
                 Certificador
@@ -742,7 +742,7 @@ function RegisterPageContent() {
             {/* Footer */}
             <div className="mt-10 pt-6 border-t border-slate-100 text-center">
               <p className="text-xs text-slate-400">
-                © {new Date().getFullYear()} Corporación Colombiana de Logística
+                © {new Date().getFullYear()} Plataforma logística
               </p>
             </div>
           </div>

@@ -294,12 +294,12 @@ const PrintReferralModal: React.FC<PrintReferralModalProps> = ({ order, owner, i
             {/* Header del documento */}
             <div className="flex justify-between items-start mb-8">
               <div>
-                <div className="flex items-center gap-2 mb-4">
+                {/* <div className="flex items-center gap-2 mb-4">
                   <AppLogo className="size-8 text-primary" />
                   <span className="text-xl font-bold tracking-tight uppercase text-slate-800">Certificador <span className="text-primary">Pro</span></span>
-                </div>
+                </div> */}
                 <div className="space-y-0.5">
-                  <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Emisor Logístico</span>
+                  <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Cliente Logístico</span>
                   <div className="text-sm font-bold text-slate-800">{owner?.name || 'Logística Integral S.A.S'}</div>
                   <div className="text-[11px] font-medium text-slate-500">NIT: {owner?.nit || '900.123.456-7'}</div>
                   <div className="text-[11px] font-medium text-slate-500">{owner?.address || 'Calle 100 #15-30'}, {owner?.city || 'Bogotá'}</div>

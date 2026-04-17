@@ -67,7 +67,7 @@ import { useAuth } from "@/context/auth-context";
 import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
 
 const ALL_UNITS = ["Unidad", "Caja", "Pack"];
-const PRODUCT_TYPES = ["Alimento", "Farmacia", "Equipo médico"];
+const PRODUCT_TYPES = ["Alimento", "Farmacia", "Equipo médico", "Fisiológica"," Medicada" ,"Otro"];
 
 const fetchBootstrapData = async () => {
   const response = await fetch('/api/app-data/bootstrap', { cache: 'no-store' });

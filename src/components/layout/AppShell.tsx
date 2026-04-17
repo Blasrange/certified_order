@@ -22,6 +22,7 @@ import {
   Briefcase,
   ShieldCheck,
   Settings2,
+  BookOpen,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,7 @@ import { cn } from "@/lib/utils";
 import { SystemLoadingOverlay } from "@/components/ui/system-loading-overlay";
 import { useFilteredAppData } from "../../hooks/use-filtered-app-data";
 
-type View = "home" | "dashboard" | "my-tasks" | "orders" | "mapping" | "directory" | "materials" | "users" | "referrals" | "owners" | "roles";
+type View = "home" | "dashboard" | "my-tasks" | "orders" | "mapping" | "directory" | "materials" | "users" | "referrals" | "owners" | "roles" | "manual";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -87,7 +88,7 @@ export default function AppShell({
   }, [loadPermissions]);
 
   React.useEffect(() => {
-    if (activeView !== "home" && userPermissions.length > 0) {
+    if (!["home", "manual"].includes(activeView) && userPermissions.length > 0) {
       const moduleId = activeView === "my-tasks" ? "tasks" : activeView;
       if (!userPermissions.includes(moduleId)) {
         router.replace("/home");
@@ -174,6 +175,7 @@ export default function AppShell({
       case 'referrals': return 'Abriendo remisiones...';
       case 'owners': return 'Abriendo propietarios...';
       case 'roles': return 'Abriendo roles...';
+      case 'manual': return 'Abriendo manual...';
       default: return 'Cargando módulo...';
     }
   };
@@ -191,6 +193,7 @@ export default function AppShell({
       case "users": return "Seguridad y Accesos";
       case "owners": return "Propietarios";
       case "roles": return "Roles y Permisos";
+      case "manual": return "Manual del Sistema";
       default: return "Inicio";
     }
   };
@@ -202,6 +205,8 @@ export default function AppShell({
       case "orders":
       case "referrals":
         return "Operación";
+      case "manual":
+        return "Ayuda";
       case "mapping":
       case "directory":
       case "materials":
@@ -410,6 +415,21 @@ export default function AppShell({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleViewChange("manual")}
+                  className={cn(
+                    "h-9 gap-2 text-sm font-medium rounded-xl transition-all duration-200",
+                    activeView === "manual"
+                      ? "bg-slate-100 text-slate-900"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  )}
+                >
+                  <BookOpen className="size-4" />
+                  Manual
+                </Button>
               </nav>
             </div>
 

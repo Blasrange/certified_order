@@ -142,15 +142,13 @@ export default function LoginPage() {
               <div className="flex size-10 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm shadow-sm">
                 <AppLogo className="size-6 text-white" />
               </div>
-              <span className="text-sm font-semibold tracking-wide text-white/80">CCL</span>
+              <span className="text-sm font-semibold tracking-wide text-white/80">Portal</span>
             </div>
             
             <div className="space-y-4">
               <div className="space-y-3">
                 <h1 className="text-4xl font-bold text-white leading-tight tracking-tight">
-                  Corporación<br />
-                  Colombiana de<br />
-                  Logística
+                  Portal de certificación logística
                 </h1>
                 <div className="h-1 w-20 bg-white/60 rounded-full" />
               </div>
@@ -160,7 +158,7 @@ export default function LoginPage() {
             </div>
             
             <div className="text-white/30 text-xs">
-              © {new Date().getFullYear()} CCL
+              © {new Date().getFullYear()} Plataforma logística
             </div>
           </div>
         </section>
@@ -181,7 +179,7 @@ export default function LoginPage() {
                 Bienvenido
               </h2>
               <p className="mt-2 text-slate-500 text-base leading-relaxed">
-                Accede a tu cuenta para continuar con tus operaciones en CCL.
+                Accede a tu cuenta para continuar con tus operaciones.
               </p>
             </div>
 
@@ -195,7 +193,7 @@ export default function LoginPage() {
                   <UserIcon className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-slate-400 transition-colors peer-focus:text-[#1d57b7]" />
                   <Input
                     id="username"
-                    placeholder="CC1050067497"
+                    placeholder="CC100000000"
                     autoComplete="username"
                     required
                     disabled={isSubmitting}
@@ -252,12 +250,13 @@ export default function LoginPage() {
                 </Link>
               </div>
 
-              <Link
+              {/*boton de registrar usurios si alguna novedad lo requiere, por ahora se mantiene oculto para evitar confusiones*/}
+              {/* <Link
                 href="/register?mode=signup"
                 className="flex h-12 w-full items-center justify-center rounded-xl border border-[#1d57b7]/15 bg-[#f4f8ff] text-base font-semibold text-[#1d57b7] transition-all duration-200 hover:border-[#1d57b7]/30 hover:bg-white"
               >
                 Crear usuario nuevo
-              </Link>
+              </Link> */}
 
               <Button type="submit" className={primaryButtonClassName} disabled={isSubmitting}>
                 {isSubmitting ? (
@@ -277,7 +276,7 @@ export default function LoginPage() {
             {/* Footer */}
             <div className="mt-12 pt-6 border-t border-slate-100 text-center">
               <p className="text-sm text-slate-400">
-                © {new Date().getFullYear()} Corporación Colombiana de Logística
+                © {new Date().getFullYear()} Plataforma logística
               </p>
               <p className="mt-1 text-xs text-slate-300">
                 Versión: 1.0.1

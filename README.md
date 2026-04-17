@@ -40,6 +40,12 @@ El sistema inicia en un estado limpio de producción. Utiliza las siguientes cre
 *Nota: Una vez ingreses, podrás crear nuevos usuarios, roles y configurar los propietarios de carga en el módulo de Administración.*
 
 ---
+
+## 📘 Manual de uso web
+
+Para revisar cómo funciona el sistema desde la interfaz, qué hace cada módulo y cómo se crea cada dato desde la web, consulta el manual en [MANUAL_WEB.md](MANUAL_WEB.md).
+
+---
 ## commit
 ```bash
 git add .
