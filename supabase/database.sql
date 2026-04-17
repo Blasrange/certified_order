@@ -827,6 +827,39 @@ create trigger trg_order_boxes_updated_at before update on public.order_boxes fo
 drop trigger if exists trg_order_box_items_updated_at on public.order_box_items;
 create trigger trg_order_box_items_updated_at before update on public.order_box_items for each row execute function public.set_updated_at();
 
+--
+-- POLITICA DE AUDITORIA DEL SISTEMA
+--
+-- Auditoria obligatoria en system_change_log:
+-- 1. Seguridad y autorizacion:
+--    - app_users
+--    - app_roles
+--    - role_module_permissions
+--    - user_owner_access
+-- 2. Maestras principales del negocio:
+--    - owners
+--    - customers
+--    - stores
+--    - materials
+--    - mapping_profiles
+-- 3. Entidades principales de operacion:
+--    - certification_processes
+--    - process_orders
+--
+-- Auditoria opcional:
+--    - material_uoms
+--    - email_messages
+--
+-- Excluidas del audit log general por alto volumen y bajo valor relativo
+-- de trazabilidad fila a fila:
+--    - order_assignments
+--    - order_items
+--    - order_boxes
+--    - order_box_items
+--
+-- Si se requiere auditoria opcional, habilitar triggers adicionales despues
+-- de ejecutar este esquema base.
+
 drop trigger if exists trg_app_roles_audit on public.app_roles;
 create trigger trg_app_roles_audit after insert or update or delete on public.app_roles for each row execute function public.audit_table_change();
 
@@ -845,8 +878,10 @@ create trigger trg_stores_audit after insert or update or delete on public.store
 drop trigger if exists trg_materials_audit on public.materials;
 create trigger trg_materials_audit after insert or update or delete on public.materials for each row execute function public.audit_table_change();
 
+-- Auditoria opcional: material_uoms suele ser util para trazabilidad tecnica,
+-- pero no es obligatoria en el log general por defecto.
 drop trigger if exists trg_material_uoms_audit on public.material_uoms;
-create trigger trg_material_uoms_audit after insert or update or delete on public.material_uoms for each row execute function public.audit_table_change();
+-- create trigger trg_material_uoms_audit after insert or update or delete on public.material_uoms for each row execute function public.audit_table_change();
 
 drop trigger if exists trg_mapping_profiles_audit on public.mapping_profiles;
 create trigger trg_mapping_profiles_audit after insert or update or delete on public.mapping_profiles for each row execute function public.audit_table_change();
@@ -854,8 +889,10 @@ create trigger trg_mapping_profiles_audit after insert or update or delete on pu
 drop trigger if exists trg_app_users_audit on public.app_users;
 create trigger trg_app_users_audit after insert or update or delete on public.app_users for each row execute function public.audit_table_change();
 
+-- Auditoria opcional: email_messages sirve para soporte y trazabilidad de comunicaciones,
+-- pero no es obligatoria en el log general por defecto.
 drop trigger if exists trg_email_messages_audit on public.email_messages;
-create trigger trg_email_messages_audit after insert or update or delete on public.email_messages for each row execute function public.audit_table_change();
+-- create trigger trg_email_messages_audit after insert or update or delete on public.email_messages for each row execute function public.audit_table_change();
 
 drop trigger if exists trg_user_owner_access_audit on public.user_owner_access;
 create trigger trg_user_owner_access_audit after insert or update or delete on public.user_owner_access for each row execute function public.audit_table_change();
@@ -866,17 +903,12 @@ create trigger trg_certification_processes_audit after insert or update or delet
 drop trigger if exists trg_process_orders_audit on public.process_orders;
 create trigger trg_process_orders_audit after insert or update or delete on public.process_orders for each row execute function public.audit_table_change();
 
+-- Las tablas operativas de detalle generan demasiado volumen y ruido en system_change_log.
+-- Se audita el pedido y el proceso, pero no sus hijos transaccionales fila a fila.
 drop trigger if exists trg_order_assignments_audit on public.order_assignments;
-create trigger trg_order_assignments_audit after insert or update or delete on public.order_assignments for each row execute function public.audit_table_change();
-
 drop trigger if exists trg_order_items_audit on public.order_items;
-create trigger trg_order_items_audit after insert or update or delete on public.order_items for each row execute function public.audit_table_change();
-
 drop trigger if exists trg_order_boxes_audit on public.order_boxes;
-create trigger trg_order_boxes_audit after insert or update or delete on public.order_boxes for each row execute function public.audit_table_change();
-
 drop trigger if exists trg_order_box_items_audit on public.order_box_items;
-create trigger trg_order_box_items_audit after insert or update or delete on public.order_box_items for each row execute function public.audit_table_change();
 
 insert into public.app_roles (role_code, name, description, is_active)
 values

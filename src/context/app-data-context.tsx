@@ -5,6 +5,7 @@ import * as React from "react";
 import { useAuth } from "@/context/auth-context";
 import { toast } from "@/hooks/use-toast";
 import type { AppBootstrapData } from "@/lib/app-data-types";
+import type { GroupedOrder } from "@/lib/types";
 import type { User } from "@/lib/types";
 
 type RefreshOptions = {
@@ -15,6 +16,7 @@ type AppDataContextValue = AppBootstrapData & {
   loading: boolean;
   refreshing: boolean;
   refresh: (options?: RefreshOptions) => Promise<void>;
+  setGroupedProcesses: (processes: GroupedOrder[]) => void;
 };
 
 const BOOTSTRAP_TTL_MS = 30_000;
@@ -94,6 +96,20 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
     lastToastAtRef.current = now;
     toast({ title, description, variant });
+  }, []);
+
+  const setGroupedProcesses = React.useCallback((processes: GroupedOrder[]) => {
+    setData((current) => {
+      const nextData = {
+        ...current,
+        groupedProcesses: processes,
+      };
+
+      lastRefreshSignatureRef.current = JSON.stringify(nextData);
+      return nextData;
+    });
+    lastLoadedAtRef.current = Date.now();
+    hasLoadedOnceRef.current = true;
   }, []);
 
   const refresh = React.useCallback(async (options?: RefreshOptions) => {
@@ -198,7 +214,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     loading,
     refreshing,
     refresh,
-  }), [data, loading, refreshing, refresh]);
+    setGroupedProcesses,
+  }), [data, loading, refreshing, refresh, setGroupedProcesses]);
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;
 }

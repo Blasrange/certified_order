@@ -84,6 +84,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { Checkbox } from "@/components/ui/checkbox";
 import { 
   Tooltip, 
   TooltipContent, 
@@ -536,8 +537,11 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isGestionOpen, setIsGestionOpen] = useState(false);
   const [isAssignOpen, setIsAssignOpen] = useState(false);
+  const [assignMode, setAssignMode] = useState<'single' | 'bulk'>('single');
+  const [bulkSelectedUserId, setBulkSelectedUserId] = useState("");
   
   const [selectedOrderGroup, setSelectedOrderGroup] = useState<OrderGroup | null>(null);
+  const [selectedOrderKeys, setSelectedOrderKeys] = useState<string[]>([]);
   const [editingProcessId, setEditingProcessId] = useState<string | null>(null);
   
   const [file, setFile] = useState<File | null>(null);
@@ -597,10 +601,12 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
 
   const saveToStorage = (updatedProcesses: GroupedOrder[]) => {
     setProcesses(updatedProcesses);
+    appData.setGroupedProcesses(updatedProcesses);
     void persistGroupedProcesses(updatedProcesses)
       .then((syncedProcesses) => {
         if (Array.isArray(syncedProcesses)) {
           setProcesses(syncedProcesses);
+          appData.setGroupedProcesses(syncedProcesses);
         }
         void appData.refresh();
       })
@@ -609,6 +615,10 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
         toast({ variant: "destructive", title: "Sincronización pendiente", description: "Los cambios del proceso se aplicaron localmente, pero no fue posible sincronizarlos con la base de datos." });
       });
   };
+
+  const getOrderSelectionKey = useCallback((order: Pick<OrderGroup, 'id' | 'orderNumber'>) => {
+    return `${order.id}::${order.orderNumber}`;
+  }, []);
 
   const activeProcess = useMemo(() => 
     processes.find(p => p.id === selectedProcessId) || null
@@ -767,6 +777,14 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
     return filtered.sort((a, b) => {
       if (a.isFinalized && !b.isFinalized) return 1;
       if (!a.isFinalized && b.isFinalized) return -1;
+
+      const aHasAssignedUser = Boolean(a.assignedTo?.[0]);
+      const bHasAssignedUser = Boolean(b.assignedTo?.[0]);
+
+      if (aHasAssignedUser !== bHasAssignedUser) {
+        return aHasAssignedUser ? 1 : -1;
+      }
+
       const priority: Record<string, number> = { 'pending': 1, 'partial': 2, 'verified': 3, 'cancelled': 4 };
       return (priority[a.status] || 5) - (priority[b.status] || 5);
     });
@@ -783,6 +801,16 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
   const paginatedOrders = useMemo(() => 
     filteredOrders.slice((orderCurrentPage - 1) * orderItemsPerPage, orderCurrentPage * orderItemsPerPage)
   , [filteredOrders, orderCurrentPage, orderItemsPerPage]);
+
+  useEffect(() => {
+    if (!activeProcess) {
+      setSelectedOrderKeys([]);
+      return;
+    }
+
+    const validKeys = new Set(activeProcess.orders.map((order) => getOrderSelectionKey(order)));
+    setSelectedOrderKeys((prev) => prev.filter((key) => validKeys.has(key)));
+  }, [activeProcess, getOrderSelectionKey]);
 
   const [headerData, setHeaderData] = useState({
     name: "",
@@ -1140,7 +1168,124 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
       return p;
     });
     saveToStorage(updated);
+    setSelectedOrderKeys((prev) => prev.filter((key) => !key.startsWith(`${orderId}::`)));
     toast({ title: "Pedido eliminado", description: `El pedido ${orderId} fue retirado correctamente del proceso.` });
+  };
+
+  const applyAssignmentToOrders = useCallback((orderKeys: string[], userId: string | null) => {
+    if (!selectedProcessId || orderKeys.length === 0) {
+      return { updatedProcesses: processes, affectedCount: 0, skippedLockedCount: 0 };
+    }
+
+    const orderKeySet = new Set(orderKeys);
+    let affectedCount = 0;
+    let skippedLockedCount = 0;
+
+    const updatedProcesses = processes.map((process) => {
+      if (process.id !== selectedProcessId) {
+        return process;
+      }
+
+      const newOrders = process.orders.map((order) => {
+        const orderKey = getOrderSelectionKey(order);
+        if (!orderKeySet.has(orderKey)) {
+          return order;
+        }
+
+        if (order.isFinalized) {
+          skippedLockedCount += 1;
+          return order;
+        }
+
+        affectedCount += 1;
+        return { ...order, assignedTo: userId ? [userId] : [] };
+      });
+
+      return { ...process, orders: newOrders };
+    });
+
+    return { updatedProcesses, affectedCount, skippedLockedCount };
+  }, [getOrderSelectionKey, processes, selectedProcessId]);
+
+  const handleToggleOrderSelection = useCallback((order: OrderGroup, checked: boolean) => {
+    if (order.isFinalized) {
+      return;
+    }
+
+    const orderKey = getOrderSelectionKey(order);
+    setSelectedOrderKeys((prev) => {
+      if (checked) {
+        return prev.includes(orderKey) ? prev : [...prev, orderKey];
+      }
+
+      return prev.filter((key) => key !== orderKey);
+    });
+  }, [getOrderSelectionKey]);
+
+  const selectablePaginatedOrders = paginatedOrders.filter((order) => !order.isFinalized);
+  const allVisibleOrdersSelected = selectablePaginatedOrders.length > 0 && selectablePaginatedOrders.every((order) =>
+    selectedOrderKeys.includes(getOrderSelectionKey(order))
+  );
+  const someVisibleOrdersSelected = selectablePaginatedOrders.some((order) =>
+    selectedOrderKeys.includes(getOrderSelectionKey(order))
+  );
+
+  const handleToggleAllVisibleOrders = useCallback((checked: boolean) => {
+    const visibleKeys = selectablePaginatedOrders.map((order) => getOrderSelectionKey(order));
+    setSelectedOrderKeys((prev) => {
+      if (checked) {
+        return Array.from(new Set([...prev, ...visibleKeys]));
+      }
+
+      const visibleKeySet = new Set(visibleKeys);
+      return prev.filter((key) => !visibleKeySet.has(key));
+    });
+  }, [getOrderSelectionKey, selectablePaginatedOrders]);
+
+  const selectedOrdersForBulkAssign = activeProcess
+    ? activeProcess.orders.filter((order) => selectedOrderKeys.includes(getOrderSelectionKey(order)))
+    : [];
+
+  const bulkLockedOrdersCount = selectedOrdersForBulkAssign.filter((order) => order.isFinalized).length;
+  const bulkAssignableOrdersCount = selectedOrdersForBulkAssign.length - bulkLockedOrdersCount;
+  const bulkAssignmentSummary = useMemo(() => {
+    const summary = new Map<string, { user: User | null; count: number; isUnassigned: boolean }>();
+
+    selectedOrdersForBulkAssign
+      .filter((order) => !order.isFinalized)
+      .forEach((order) => {
+        const assignedUserId = order.assignedTo?.[0] || "__unassigned__";
+        const current = summary.get(assignedUserId);
+        if (current) {
+          current.count += 1;
+          return;
+        }
+
+        summary.set(assignedUserId, {
+          user: assignedUserId === "__unassigned__" ? null : availableUsers.find((user) => user.id === assignedUserId) || null,
+          count: 1,
+          isUnassigned: assignedUserId === "__unassigned__",
+        });
+      });
+
+    return Array.from(summary.values()).sort((left, right) => right.count - left.count);
+  }, [availableUsers, selectedOrdersForBulkAssign]);
+  const bulkHasMixedAssignments = bulkAssignmentSummary.length > 1;
+  const bulkSingleAssignedUser = bulkAssignmentSummary.length === 1 && !bulkAssignmentSummary[0].isUnassigned
+    ? bulkAssignmentSummary[0].user
+    : null;
+  const bulkSingleAssignedCount = bulkAssignmentSummary.length === 1 ? bulkAssignmentSummary[0].count : 0;
+
+  const openBulkAssignModal = () => {
+    if (selectedOrderKeys.length === 0) {
+      toast({ variant: "destructive", title: "Sin pedidos seleccionados", description: "Selecciona uno o varios pedidos antes de asignar un responsable." });
+      return;
+    }
+
+    setAssignMode('bulk');
+    setSelectedOrderGroup(null);
+    setBulkSelectedUserId(bulkSingleAssignedUser?.id || "");
+    setIsAssignOpen(true);
   };
 
   const handleDirectAssign = (userId: string) => {
@@ -1155,22 +1300,53 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
       return;
     }
 
-    const updated = processes.map(p => {
-      if (p.id === selectedProcessId) {
-        const newOrders = p.orders.map(o => {
-          if (o.id === selectedOrderGroup.id) {
-            return { ...o, assignedTo: [userId] };
-          }
-          return o;
-        });
-        return { ...p, orders: newOrders };
-      }
-      return p;
-    });
-    saveToStorage(updated);
+    const { updatedProcesses, affectedCount } = applyAssignmentToOrders([getOrderSelectionKey(selectedOrderGroup)], userId);
+    if (affectedCount === 0) {
+      return;
+    }
+
+    saveToStorage(updatedProcesses);
     
     setSelectedOrderGroup(prev => prev ? { ...prev, assignedTo: [userId] } : null);
     toast({ title: "Responsable asignado", description: "La certificación quedó asignada correctamente al usuario seleccionado." });
+  };
+
+  const handleBulkAssign = (userId: string) => {
+    const { updatedProcesses, affectedCount, skippedLockedCount } = applyAssignmentToOrders(selectedOrderKeys, userId);
+
+    if (affectedCount === 0) {
+      toast({ variant: "destructive", title: "Sin cambios aplicados", description: skippedLockedCount > 0 ? "Los pedidos seleccionados están cerrados y no permiten reasignación." : "No hay pedidos válidos para asignar." });
+      return;
+    }
+
+    saveToStorage(updatedProcesses);
+    setSelectedOrderKeys([]);
+    setIsAssignOpen(false);
+    toast({
+      title: "Responsables asignados",
+      description: skippedLockedCount > 0
+        ? `Se asignaron ${affectedCount} pedidos. ${skippedLockedCount} cerrados se omitieron por trazabilidad.`
+        : `Se asignaron ${affectedCount} pedidos al usuario seleccionado.`,
+    });
+  };
+
+  const handleFinalizeAssignModal = () => {
+    if (!isBulkAssignMode) {
+      setIsAssignOpen(false);
+      return;
+    }
+
+    const hasCommonCurrentAssignment = !bulkHasMixedAssignments && bulkAssignmentSummary.length === 1 && !bulkAssignmentSummary[0].isUnassigned;
+    const currentBulkAssignedUserId = hasCommonCurrentAssignment ? bulkAssignmentSummary[0].user?.id || "" : "";
+
+    if (!bulkSelectedUserId || bulkSelectedUserId === currentBulkAssignedUserId) {
+      setIsAssignOpen(false);
+      setBulkSelectedUserId("");
+      return;
+    }
+
+    handleBulkAssign(bulkSelectedUserId);
+    setBulkSelectedUserId("");
   };
 
   const handleClearAssignment = () => {
@@ -1185,19 +1361,12 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
       return;
     }
 
-    const updated = processes.map(p => {
-      if (p.id === selectedProcessId) {
-        const newOrders = p.orders.map(o => {
-          if (o.id === selectedOrderGroup.id) {
-            return { ...o, assignedTo: [] };
-          }
-          return o;
-        });
-        return { ...p, orders: newOrders };
-      }
-      return p;
-    });
-    saveToStorage(updated);
+    const { updatedProcesses, affectedCount } = applyAssignmentToOrders([getOrderSelectionKey(selectedOrderGroup)], null);
+    if (affectedCount === 0) {
+      return;
+    }
+
+    saveToStorage(updatedProcesses);
     setSelectedOrderGroup(prev => prev ? { ...prev, assignedTo: [] } : null);
     toast({ title: "Asignación eliminada", description: "La certificación quedó sin responsable asignado." });
   };
@@ -1224,6 +1393,7 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
   );
   const activeMappingProfiles = useMemo(() => mappingProfiles.filter(p => p.isActive), [mappingProfiles]);
 
+  const isBulkAssignMode = assignMode === 'bulk';
   const isCurrentOrderLocked = selectedOrderGroup?.isFinalized || false;
 
   return (
@@ -1529,12 +1699,23 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                   />
                 </div>
               </div>
-              <Button 
-                onClick={() => setIsImportModalOpen(true)} 
-                className="bg-gradient-to-r from-[#1d57b7] to-[#1a4a9e] text-white shadow-md shadow-primary/20 gap-2 px-5 rounded-xl h-10 text-sm font-semibold"
-              >
-                <FileSpreadsheet className="h-4 w-4" /> Importar pedidos
-              </Button>
+              <div className="flex items-center gap-2">
+                {selectedOrderKeys.length > 0 && (
+                  <Button 
+                    variant="outline"
+                    onClick={openBulkAssignModal}
+                    className="gap-2 px-4 rounded-xl h-10 text-sm font-semibold border-primary/20 text-primary hover:bg-primary/5"
+                  >
+                    <Users2 className="h-4 w-4" /> Asignar selección ({selectedOrderKeys.length})
+                  </Button>
+                )}
+                <Button 
+                  onClick={() => setIsImportModalOpen(true)} 
+                  className="bg-gradient-to-r from-[#1d57b7] to-[#1a4a9e] text-white shadow-md shadow-primary/20 gap-2 px-5 rounded-xl h-10 text-sm font-semibold"
+                >
+                  <FileSpreadsheet className="h-4 w-4" /> Importar pedidos
+                </Button>
+              </div>
             </CardContent>
           </Card>
 
@@ -1543,11 +1724,19 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
               <Table>
                 <TableHeader className="bg-slate-50/80">
                   <TableRow className="border-b border-slate-100">
+                    <TableHead className="pl-6 py-3 w-12">
+                      <Checkbox
+                        checked={allVisibleOrdersSelected ? true : (someVisibleOrdersSelected ? "indeterminate" : false)}
+                        onCheckedChange={(checked) => handleToggleAllVisibleOrders(checked === true)}
+                        aria-label="Seleccionar pedidos visibles"
+                      />
+                    </TableHead>
                     <TableHead className="pl-6 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Pedido / PO</TableHead>
                     <TableHead className="py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">N° Orden</TableHead>
                     <TableHead className="py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Cliente / NIT</TableHead>
                     <TableHead className="py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Punto de Venta</TableHead>
                     <TableHead className="py-3 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Unidades / Cajas</TableHead>
+                    <TableHead className="py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Responsable</TableHead>
                     <TableHead className="py-3 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Estado</TableHead>
                     <TableHead className="pr-6 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Acciones</TableHead>
                   </TableRow>
@@ -1555,6 +1744,21 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                 <TableBody>
                   {paginatedOrders.map((order, idx) => (
                     <TableRow key={idx} className="group hover:bg-slate-50/50 transition-colors border-b border-slate-50">
+                      {(() => {
+                        const assignedUser = order.assignedTo?.[0]
+                          ? availableUsers.find((user) => user.id === order.assignedTo?.[0])
+                          : null;
+
+                        return (
+                          <>
+                      <TableCell className="pl-6 py-4">
+                        <Checkbox
+                          checked={selectedOrderKeys.includes(getOrderSelectionKey(order))}
+                          onCheckedChange={(checked) => handleToggleOrderSelection(order, checked === true)}
+                          disabled={order.isFinalized}
+                          aria-label={`Seleccionar pedido ${order.id}`}
+                        />
+                      </TableCell>
                       <TableCell className="pl-6 py-4">
                         <span className="font-mono text-xs font-semibold text-slate-600">{order.id}</span>
                       </TableCell>
@@ -1578,6 +1782,25 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                           <p className="text-sm font-bold text-slate-700">{order.totalQuantity.toLocaleString()}</p>
                           <p className="text-[10px] font-semibold text-primary mt-0.5">{order.totalBoxes} cajas</p>
                         </div>
+                      </TableCell>
+                      <TableCell className="py-4">
+                        {assignedUser ? (
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Avatar className="h-7 w-7 shrink-0">
+                              <AvatarFallback className="bg-primary/10 text-primary text-[10px] font-bold">
+                                {assignedUser.name[0]}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-slate-700 truncate">{assignedUser.name}</p>
+                              <p className="text-[10px] text-slate-400 truncate">{resolveRoleLabel(assignedUser.role)}</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <Badge variant="outline" className="bg-slate-50 text-slate-500 border-slate-200 text-[10px]">
+                            Sin asignar
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell className="py-4 text-center">
                         <Badge className={cn("text-[9px] font-bold px-2.5 py-1 rounded-full", 
@@ -1612,7 +1835,7 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                                   variant="ghost" 
                                   size="icon" 
                                   className="h-8 w-8 rounded-lg text-slate-400 hover:text-primary hover:bg-primary/10"
-                                  onClick={() => { setSelectedOrderGroup(order); setIsAssignOpen(true); }}
+                                  onClick={() => { setAssignMode('single'); setSelectedOrderGroup(order); setIsAssignOpen(true); }}
                                 >
                                   <UserPlus className="h-3.5 w-3.5" />
                                 </Button>
@@ -1661,6 +1884,9 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                           </AlertDialog>
                         </div>
                       </TableCell>
+                          </>
+                        );
+                      })()}
                     </TableRow>
                   ))}
                 </TableBody>
@@ -2048,7 +2274,7 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
         />
       )}
 
-      <Dialog open={isAssignOpen} onOpenChange={setIsAssignOpen}>
+      <Dialog open={isAssignOpen} onOpenChange={(open) => { setIsAssignOpen(open); if (!open) setBulkSelectedUserId(""); }}>
         <DialogContent className="max-w-md rounded-2xl p-0 overflow-hidden bg-white shadow-xl">
           <DialogHeader className="p-6 pb-2">
             <div className="flex items-center gap-3">
@@ -2057,16 +2283,20 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <DialogTitle className="text-xl font-bold text-slate-800">Asignar responsable</DialogTitle>
-                  {isCurrentOrderLocked && <Lock className="size-3.5 text-red-500" />}
+                  <DialogTitle className="text-xl font-bold text-slate-800">
+                    {isBulkAssignMode ? 'Asignación masiva' : 'Asignar responsable'}
+                  </DialogTitle>
+                  {!isBulkAssignMode && isCurrentOrderLocked && <Lock className="size-3.5 text-red-500" />}
                 </div>
-                <DialogDescription className="text-xs text-slate-500">Selecciona el operario para este pedido</DialogDescription>
+                <DialogDescription className="text-xs text-slate-500">
+                  {isBulkAssignMode ? 'Selecciona el operario para los pedidos marcados en la tabla.' : 'Selecciona el operario para este pedido'}
+                </DialogDescription>
               </div>
             </div>
           </DialogHeader>
           
           <div className="px-6 py-4 space-y-4">
-            {isCurrentOrderLocked && (
+            {!isBulkAssignMode && isCurrentOrderLocked && (
               <Alert className="rounded-xl bg-red-50 border-red-100">
                 <Lock className="h-4 w-4 text-red-500" />
                 <AlertTitle className="text-xs font-bold text-red-700">Certificación cerrada</AlertTitle>
@@ -2076,6 +2306,120 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
               </Alert>
             )}
 
+            {isBulkAssignMode && (
+              <>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Pedidos seleccionados</p>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        {selectedOrdersForBulkAssign.length} seleccionados, {bulkAssignableOrdersCount} disponibles para asignar.
+                      </p>
+                    </div>
+                    <Badge className="bg-primary/10 text-primary border border-primary/15">
+                      {selectedOrderKeys.length} marcados
+                    </Badge>
+                  </div>
+                </div>
+
+                {bulkLockedOrdersCount > 0 && (
+                  <Alert className="rounded-xl bg-amber-50 border-amber-100">
+                    <Lock className="h-4 w-4 text-amber-500" />
+                    <AlertTitle className="text-xs font-bold text-amber-700">Pedidos cerrados incluidos</AlertTitle>
+                    <AlertDescription className="text-[10px] text-amber-600">
+                      {bulkLockedOrdersCount} pedidos finalizados se omitirán automáticamente para proteger la trazabilidad.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold text-slate-700">Responsable actual</Label>
+                  {bulkAssignableOrdersCount <= 0 ? (
+                    <div className="p-4 bg-slate-50 rounded-xl text-center border border-dashed border-slate-200">
+                      <Lock className="h-6 w-6 text-slate-300 mx-auto mb-1" />
+                      <p className="text-xs text-slate-400">Los pedidos seleccionados están cerrados</p>
+                    </div>
+                  ) : bulkSingleAssignedUser ? (
+                    <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-10 w-10">
+                          <AvatarFallback className="bg-primary/10 text-primary font-bold">{bulkSingleAssignedUser.name[0]}</AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <p className="text-sm font-bold text-slate-800">{bulkSingleAssignedUser.name}</p>
+                          <p className="text-[10px] text-slate-400">{resolveRoleLabel(bulkSingleAssignedUser.role)} • {bulkSingleAssignedCount} pedidos</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : bulkAssignmentSummary.length > 0 ? (
+                    <div className="rounded-xl border border-slate-100 bg-white overflow-hidden">
+                      <div className="max-h-40 overflow-y-auto divide-y divide-slate-100">
+                        {bulkAssignmentSummary.map((item, index) => (
+                          <div key={`${item.user?.id || 'unassigned'}-${index}`} className="flex items-center justify-between px-3 py-2.5">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <Avatar className="h-8 w-8">
+                                <AvatarFallback className="bg-slate-100 text-slate-600 text-[10px] font-bold">
+                                  {item.isUnassigned ? 'S/R' : (item.user?.name?.[0] || '?')}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-slate-700 truncate">
+                                  {item.isUnassigned ? 'Sin responsable' : item.user?.name}
+                                </p>
+                                <p className="text-[10px] text-slate-400 truncate">
+                                  {item.isUnassigned ? 'Pendiente por asignar' : resolveRoleLabel(item.user?.role)}
+                                </p>
+                              </div>
+                            </div>
+                            <Badge variant="outline" className="text-[9px] bg-slate-50 text-slate-600 ml-2">
+                              {item.count} ped.
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                      {bulkHasMixedAssignments && (
+                        <div className="px-3 py-2 border-t border-slate-100 bg-slate-50 text-[10px] text-slate-500">
+                          La selección tiene responsables mezclados. Puedes reasignarlos a un solo operario.
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-slate-50 rounded-xl text-center border border-dashed border-slate-200">
+                      <UserIcon className="h-6 w-6 text-slate-300 mx-auto mb-1" />
+                      <p className="text-xs text-slate-400">Sin responsables asignados en la selección</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold text-slate-700">Pedidos seleccionados</Label>
+                  <div className="rounded-xl border border-slate-100 bg-white overflow-hidden">
+                    <div className="max-h-44 overflow-y-auto divide-y divide-slate-100">
+                      {selectedOrdersForBulkAssign.map((order) => (
+                        <div key={getOrderSelectionKey(order)} className="px-3 py-2.5 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-700 truncate">{order.id} • #{order.orderNumber}</p>
+                            <p className="text-[10px] text-slate-400 truncate">{order.customerName}</p>
+                          </div>
+                          <Badge className={cn(
+                            "text-[9px] font-bold px-2 py-0.5 rounded-full border shrink-0",
+                            order.isFinalized
+                              ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+                              : order.status === 'partial'
+                                ? "bg-amber-50 text-amber-600 border-amber-100"
+                                : "bg-slate-50 text-slate-600 border-slate-100"
+                          )}>
+                            {order.isFinalized ? 'Cerrado' : 'Activo'}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {!isBulkAssignMode && (
             <div className="space-y-2">
               <Label className="text-xs font-semibold text-slate-700">Responsable actual</Label>
               {selectedOrderGroup?.assignedTo?.[0] ? (
@@ -2107,16 +2451,17 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                 </div>
               )}
             </div>
+            )}
 
-            {!isCurrentOrderLocked && (
+            {(!isBulkAssignMode || bulkAssignableOrdersCount > 0) && !isCurrentOrderLocked && (
               <div className="space-y-2">
                 <Label className="text-xs font-semibold text-slate-700">Nuevo responsable</Label>
                 <Select 
-                  value={selectedOrderGroup?.assignedTo?.[0] || ""} 
-                  onValueChange={handleDirectAssign}
+                  value={isBulkAssignMode ? bulkSelectedUserId : (selectedOrderGroup?.assignedTo?.[0] || "")}
+                  onValueChange={isBulkAssignMode ? setBulkSelectedUserId : handleDirectAssign}
                 >
                   <SelectTrigger className="h-11 rounded-xl">
-                    <SelectValue placeholder="Seleccionar operario..." />
+                    <SelectValue placeholder={isBulkAssignMode ? "Seleccionar operario para la selección..." : "Seleccionar operario..."} />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl max-h-[280px]">
                     {activeCertifiers.map(u => {
@@ -2146,10 +2491,11 @@ const OrdersPanel = ({ externalView, onViewChange }: OrdersPanelProps) => {
                 </Select>
               </div>
             )}
+
           </div>
           
           <DialogFooter className="p-6 bg-slate-50 border-t">
-            <Button onClick={() => setIsAssignOpen(false)} className="dialog-btn-secondary w-full">
+            <Button onClick={handleFinalizeAssignModal} className="dialog-btn-secondary w-full">
               <CheckCircle2 className="h-4 w-4 mr-2" /> Finalizar
             </Button>
           </DialogFooter>

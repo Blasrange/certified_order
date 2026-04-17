@@ -1182,7 +1182,6 @@ export const syncUsers = async (users: User[], actor?: SupabaseAuditActor) => {
 
 export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], actor?: SupabaseAuditActor) => {
   const db = resolveDbClient(actor);
-  const currentCodes = groupedProcesses.map((process) => process.id);
   const [
     existingProcessesResult,
     ownersResult,
@@ -1206,17 +1205,6 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
   assertNoError(storesResult.error, "Error consultando tiendas para procesos");
   assertNoError(materialsResult.error, "Error consultando materiales para procesos");
 
-  const idsToDelete = (existingProcesses || [])
-    .filter((process) => !currentCodes.includes(process.process_code))
-    .map((process) => process.id);
-
-  if (idsToDelete.length > 0) {
-    const { error: deleteError } = await db
-      .from("certification_processes")
-      .delete()
-      .in("id", idsToDelete);
-    assertNoError(deleteError, "Error eliminando procesos removidos");
-  }
   const ownerRowsByKey = withInternalAndBusinessKeys(ownersResult.data || [], (owner) => owner.owner_code);
   const userRowsByKey = withInternalAndBusinessKeys(usersResult.data || [], (user) => user.user_code);
   const customerIdByNit = new Map(
@@ -1224,6 +1212,12 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
   );
   const storeRowsByKey = withInternalAndBusinessKeys(storesResult.data || [], (store) => store.store_code);
   const materialRowsByKey = withInternalAndBusinessKeys(materialsResult.data || [], (material) => material.material_code);
+  const userCodeByDbId = new Map(
+    (usersResult.data || []).map((user) => [String(user.id), user.user_code || String(user.id)])
+  );
+  const ownerCodeByDbId = new Map(
+    (ownersResult.data || []).map((owner) => [String(owner.id), owner.owner_code || String(owner.id)])
+  );
   const existingProcessByCode = new Map(
     (existingProcesses || []).map((process) => [process.process_code, process])
   );
@@ -1276,65 +1270,326 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
   }
 
   const processDbIds = syncedProcesses.map((process) => process.dbId);
-  if (processDbIds.length > 0) {
-    const { error: deleteOrdersError } = await db
-      .from("process_orders")
-      .delete()
-      .in("process_id", processDbIds);
-    assertNoError(deleteOrdersError, "Error limpiando pedidos previos de procesos");
-  }
-
   const processDbIdByFrontendId = new Map(
     syncedProcesses.map((process) => [process.frontendId, process.dbId])
   );
-  const orderRows = groupedProcesses.flatMap((process) =>
-    process.orders.map((order) => ({
-      frontendProcessId: process.id,
-      frontendOrderId: order.id,
-      payload: {
-        process_id: processDbIdByFrontendId.get(process.id),
-        owner_id: order.ownerId ? ownerRowsByKey.get(order.ownerId)?.id || null : process.ownerId ? ownerRowsByKey.get(process.ownerId)?.id || null : null,
-        customer_id: customerIdByNit.get(order.nit) || null,
-        store_id: storeRowsByKey.get(order.storeCode)?.id || null,
-        external_order_id: order.id,
-        order_number: order.orderNumber,
-        customer_name: order.customerName,
-        nit: order.nit,
-        store_name: order.storeName,
-        store_code: order.storeCode,
-        total_quantity: order.totalQuantity,
-        total_boxes: order.totalBoxes,
-        status: order.status,
-        is_finalized: order.isFinalized || false,
-        finalized_at: order.finalizedAt || null,
-        certification_signature: order.certificationSignature || null,
-        certified_by_user_id: order.certifiedByUserId ? userRowsByKey.get(order.certifiedByUserId)?.id || null : null,
-        certified_by_name: order.certifiedByName || null,
-      },
-    }))
-  ).filter((row) => row.payload.process_id != null);
 
-  const dbOrderIdByFrontendKey = new Map<string, string | number>();
-  for (const row of orderRows) {
-    const { data: insertedOrders, error: orderError } = await db
+  const normalizeCompareValue = (value: unknown) => JSON.stringify(value);
+  const normalizeCompareItems = <T>(items: T[], getKey: (item: T) => string) =>
+    [...items].sort((left, right) => getKey(left).localeCompare(getKey(right)));
+
+  const buildPayloadOrderSnapshot = (process: GroupedOrder, order: OrderGroup) => ({
+    ownerId: order.ownerId || process.ownerId || null,
+    customerName: order.customerName,
+    nit: order.nit,
+    storeName: order.storeName,
+    storeCode: order.storeCode,
+    orderNumber: order.orderNumber,
+    totalQuantity: Number(order.totalQuantity || 0),
+    totalBoxes: Number(order.totalBoxes || 0),
+    status: order.status,
+    isFinalized: Boolean(order.isFinalized),
+    finalizedAt: order.finalizedAt || null,
+    certificationSignature: order.certificationSignature || null,
+    certifiedByUserId: order.certifiedByUserId || null,
+    certifiedByName: order.certifiedByName || null,
+    assignedTo: normalizeCompareItems([...(order.assignedTo || [])], (item) => item),
+    items: normalizeCompareItems(
+      order.items.map((item) => ({
+        productCode: item.productCode,
+        description: item.description,
+        batch: item.batch,
+        enteredBatch: item.enteredBatch || null,
+        batchValidationStatus: item.batchValidationStatus || "pending",
+        expiryDate: item.expiryDate || "",
+        productionDate: item.productionDate || "",
+        quantity: Number(item.quantity || 0),
+        verifiedQuantity: Number(item.verifiedQuantity || 0),
+        boxes: Number(item.boxes || 0),
+        boxFactor: item.boxFactor != null ? Number(item.boxFactor) : null,
+        status: item.status,
+      })),
+      (item) => [
+        item.productCode,
+        item.batch,
+        item.expiryDate,
+        item.productionDate,
+        item.description,
+        String(item.quantity),
+        String(item.verifiedQuantity),
+      ].join("::")
+    ),
+    boxes: normalizeCompareItems(
+      (order.boxes || []).map((box) => ({
+        boxNumber: Number(box.boxNumber || 0),
+        items: normalizeCompareItems(
+          box.items.map((item) => ({
+            productCode: item.productCode,
+            description: item.description,
+            quantity: Number(item.quantity || 0),
+            batch: item.batch || null,
+          })),
+          (item) => [item.productCode, item.batch || "", item.description, String(item.quantity)].join("::")
+        ),
+      })),
+      (box) => String(box.boxNumber)
+    ),
+  });
+
+  if (processDbIds.length > 0) {
+    const { data: existingOrders, error: existingOrdersError } = await db
       .from("process_orders")
-      .insert(row.payload)
-      .select("id")
-      .limit(1);
-    assertNoError(orderError, "Error insertando pedidos de procesos");
+      .select("id, process_id, owner_id, customer_name, nit, store_name, store_code, order_number, external_order_id, total_quantity, total_boxes, status, is_finalized, finalized_at, certification_signature, certified_by_user_id, certified_by_name")
+      .in("process_id", processDbIds);
+    assertNoError(existingOrdersError, "Error consultando pedidos existentes de procesos");
 
-    const insertedOrder = insertedOrders?.[0];
-    if (!insertedOrder) {
-      throw new Error(`No se pudo recuperar el id del pedido ${row.frontendOrderId}.`);
+    const existingOrderIds = (existingOrders || []).map((order) => order.id);
+
+    const [existingAssignmentsResult, existingItemsResult, existingBoxesResult] = existingOrderIds.length > 0
+      ? await Promise.all([
+          db.from("order_assignments").select("order_id, user_id").in("order_id", existingOrderIds),
+          db.from("order_items").select("order_id, product_code, description, batch, entered_batch, batch_validation_status, expiry_date, production_date, quantity, verified_quantity, boxes, box_factor, status").in("order_id", existingOrderIds),
+          db.from("order_boxes").select("id, order_id, box_number").in("order_id", existingOrderIds),
+        ])
+      : [
+          { data: [], error: null },
+          { data: [], error: null },
+          { data: [], error: null },
+        ];
+
+    const existingBoxIds = (existingBoxesResult.data || []).map((box) => box.id);
+    const existingBoxItemsResult = existingBoxIds.length > 0
+      ? await db
+          .from("order_box_items")
+          .select("order_box_id, product_code, description, quantity, batch")
+          .in("order_box_id", existingBoxIds)
+      : { data: [], error: null };
+
+    assertNoError(existingAssignmentsResult.error, "Error consultando asignaciones existentes de pedidos");
+    assertNoError(existingItemsResult.error, "Error consultando items existentes de pedidos");
+    assertNoError(existingBoxesResult.error, "Error consultando cajas existentes de pedidos");
+    assertNoError(existingBoxItemsResult.error, "Error consultando items existentes por caja");
+
+    const assignmentsByOrderId = new Map<string, string[]>();
+    (existingAssignmentsResult.data || []).forEach((assignment) => {
+      const key = String(assignment.order_id);
+      const current = assignmentsByOrderId.get(key) || [];
+      current.push(userCodeByDbId.get(String(assignment.user_id)) || String(assignment.user_id));
+      assignmentsByOrderId.set(key, current);
+    });
+
+    const itemsByOrderId = new Map<string, Array<Record<string, unknown>>>();
+    (existingItemsResult.data || []).forEach((item) => {
+      const key = String(item.order_id);
+      const current = itemsByOrderId.get(key) || [];
+      current.push({
+        productCode: item.product_code,
+        description: item.description,
+        batch: item.batch,
+        enteredBatch: item.entered_batch || null,
+        batchValidationStatus: item.batch_validation_status || "pending",
+        expiryDate: item.expiry_date || "",
+        productionDate: item.production_date || "",
+        quantity: Number(item.quantity || 0),
+        verifiedQuantity: Number(item.verified_quantity || 0),
+        boxes: Number(item.boxes || 0),
+        boxFactor: item.box_factor != null ? Number(item.box_factor) : null,
+        status: item.status,
+      });
+      itemsByOrderId.set(key, current);
+    });
+
+    const boxItemsByBoxId = new Map<string, Array<Record<string, unknown>>>();
+    (existingBoxItemsResult.data || []).forEach((item) => {
+      const key = String(item.order_box_id);
+      const current = boxItemsByBoxId.get(key) || [];
+      current.push({
+        productCode: item.product_code,
+        description: item.description,
+        quantity: Number(item.quantity || 0),
+        batch: item.batch || null,
+      });
+      boxItemsByBoxId.set(key, current);
+    });
+
+    const boxesByOrderId = new Map<string, Array<Record<string, unknown>>>();
+    (existingBoxesResult.data || []).forEach((box) => {
+      const key = String(box.order_id);
+      const current = boxesByOrderId.get(key) || [];
+      current.push({
+        boxNumber: Number(box.box_number || 0),
+        items: normalizeCompareItems(
+          boxItemsByBoxId.get(String(box.id)) || [],
+          (item) => [
+            String(item.productCode || ""),
+            String(item.batch || ""),
+            String(item.description || ""),
+            String(item.quantity || 0),
+          ].join("::")
+        ),
+      });
+      boxesByOrderId.set(key, current);
+    });
+
+    const existingOrderByKey = new Map<string, { id: string | number; compareValue: string }>();
+    (existingOrders || []).forEach((order) => {
+      const compareValue = normalizeCompareValue({
+        ownerId: order.owner_id ? ownerCodeByDbId.get(String(order.owner_id)) || String(order.owner_id) : null,
+        customerName: order.customer_name,
+        nit: order.nit,
+        storeName: order.store_name,
+        storeCode: order.store_code,
+        orderNumber: order.order_number,
+        totalQuantity: Number(order.total_quantity || 0),
+        totalBoxes: Number(order.total_boxes || 0),
+        status: order.status,
+        isFinalized: Boolean(order.is_finalized),
+        finalizedAt: order.finalized_at || null,
+        certificationSignature: order.certification_signature || null,
+        certifiedByUserId: order.certified_by_user_id ? userCodeByDbId.get(String(order.certified_by_user_id)) || String(order.certified_by_user_id) : null,
+        certifiedByName: order.certified_by_name || null,
+        assignedTo: normalizeCompareItems(assignmentsByOrderId.get(String(order.id)) || [], (item) => item),
+        items: normalizeCompareItems(itemsByOrderId.get(String(order.id)) || [], (item) => [
+          String(item.productCode || ""),
+          String(item.batch || ""),
+          String(item.expiryDate || ""),
+          String(item.productionDate || ""),
+          String(item.description || ""),
+          String(item.quantity || 0),
+          String(item.verifiedQuantity || 0),
+        ].join("::")),
+        boxes: normalizeCompareItems(boxesByOrderId.get(String(order.id)) || [], (box) => String(box.boxNumber || 0)),
+      });
+
+      existingOrderByKey.set(`${String(order.process_id)}::${order.external_order_id}`, {
+        id: order.id,
+        compareValue,
+      });
+    });
+
+    const payloadOrderEntries = groupedProcesses.flatMap((process) =>
+      process.orders.map((order) => {
+        const processDbId = processDbIdByFrontendId.get(process.id);
+        if (!processDbId) {
+          return null;
+        }
+
+        const payload = {
+          process_id: processDbId,
+          owner_id: order.ownerId ? ownerRowsByKey.get(order.ownerId)?.id || null : process.ownerId ? ownerRowsByKey.get(process.ownerId)?.id || null : null,
+          customer_id: customerIdByNit.get(order.nit) || null,
+          store_id: storeRowsByKey.get(order.storeCode)?.id || null,
+          external_order_id: order.id,
+          order_number: order.orderNumber,
+          customer_name: order.customerName,
+          nit: order.nit,
+          store_name: order.storeName,
+          store_code: order.storeCode,
+          total_quantity: order.totalQuantity,
+          total_boxes: order.totalBoxes,
+          status: order.status,
+          is_finalized: order.isFinalized || false,
+          finalized_at: order.finalizedAt || null,
+          certification_signature: order.certificationSignature || null,
+          certified_by_user_id: order.certifiedByUserId ? userRowsByKey.get(order.certifiedByUserId)?.id || null : null,
+          certified_by_name: order.certifiedByName || null,
+        };
+
+        return {
+          frontendProcessId: process.id,
+          frontendOrderId: order.id,
+          compareKey: `${String(processDbId)}::${order.id}`,
+          compareValue: normalizeCompareValue(buildPayloadOrderSnapshot(process, order)),
+          order,
+          payload,
+        };
+      })
+    ).filter(Boolean) as Array<{
+      frontendProcessId: string;
+      frontendOrderId: string;
+      compareKey: string;
+      compareValue: string;
+      order: OrderGroup;
+      payload: Record<string, unknown> & { process_id: string | number };
+    }>;
+
+    const expectedOrderKeys = new Set(payloadOrderEntries.map((entry) => entry.compareKey));
+    const orphanOrderIds = Array.from(existingOrderByKey.entries())
+      .filter(([key]) => !expectedOrderKeys.has(key))
+      .map(([, value]) => value.id);
+
+    if (orphanOrderIds.length > 0) {
+      const { error: deleteOrphanOrdersError } = await db
+        .from("process_orders")
+        .delete()
+        .in("id", orphanOrderIds);
+      assertNoError(deleteOrphanOrdersError, "Error eliminando pedidos removidos del proceso");
     }
 
-    dbOrderIdByFrontendKey.set(`${row.frontendProcessId}::${row.frontendOrderId}`, insertedOrder.id);
-  }
+    const dbOrderIdByFrontendKey = new Map<string, string | number>();
+    const touchedEntries: typeof payloadOrderEntries = [];
 
-  const assignmentRows = groupedProcesses.flatMap((process) =>
-    process.orders.flatMap((order) =>
-      (order.assignedTo || []).map((userId) => {
-        const dbOrderId = dbOrderIdByFrontendKey.get(`${process.id}::${order.id}`);
+    for (const entry of payloadOrderEntries) {
+      const existingOrder = existingOrderByKey.get(entry.compareKey);
+      if (existingOrder) {
+        dbOrderIdByFrontendKey.set(`${entry.frontendProcessId}::${entry.frontendOrderId}`, existingOrder.id);
+
+        if (existingOrder.compareValue === entry.compareValue) {
+          continue;
+        }
+
+        const { error: updateOrderError } = await db
+          .from("process_orders")
+          .update(entry.payload)
+          .eq("id", existingOrder.id);
+        assertNoError(updateOrderError, "Error actualizando pedidos de procesos");
+        touchedEntries.push(entry);
+        continue;
+      }
+
+      const { data: insertedOrders, error: insertOrderError } = await db
+        .from("process_orders")
+        .insert(entry.payload)
+        .select("id")
+        .limit(1);
+      assertNoError(insertOrderError, "Error insertando pedidos de procesos");
+
+      const insertedOrder = insertedOrders?.[0];
+      if (!insertedOrder) {
+        throw new Error(`No se pudo recuperar el id del pedido ${entry.frontendOrderId}.`);
+      }
+
+      dbOrderIdByFrontendKey.set(`${entry.frontendProcessId}::${entry.frontendOrderId}`, insertedOrder.id);
+      touchedEntries.push(entry);
+    }
+
+    const touchedOrderIds = touchedEntries
+      .map((entry) => dbOrderIdByFrontendKey.get(`${entry.frontendProcessId}::${entry.frontendOrderId}`))
+      .filter(Boolean) as Array<string | number>;
+
+    if (touchedOrderIds.length > 0) {
+      const { error: deleteAssignmentsError } = await db
+        .from("order_assignments")
+        .delete()
+        .in("order_id", touchedOrderIds);
+      assertNoError(deleteAssignmentsError, "Error limpiando asignaciones previas de pedidos");
+
+      const { error: deleteItemsError } = await db
+        .from("order_items")
+        .delete()
+        .in("order_id", touchedOrderIds);
+      assertNoError(deleteItemsError, "Error limpiando items previos de pedidos");
+
+      const { error: deleteBoxesError } = await db
+        .from("order_boxes")
+        .delete()
+        .in("order_id", touchedOrderIds);
+      assertNoError(deleteBoxesError, "Error limpiando cajas previas de pedidos");
+    }
+
+    const assignmentRows = touchedEntries.flatMap((entry) =>
+      (entry.order.assignedTo || []).map((userId) => {
+        const dbOrderId = dbOrderIdByFrontendKey.get(`${entry.frontendProcessId}::${entry.frontendOrderId}`);
         const dbUserId = userRowsByKey.get(userId)?.id;
         if (!dbOrderId || !dbUserId) {
           return null;
@@ -1345,20 +1600,18 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
           user_id: dbUserId,
         };
       })
-    )
-  ).filter(Boolean);
+    ).filter(Boolean);
 
-  if (assignmentRows.length > 0) {
-    const { error: assignmentError } = await db
-      .from("order_assignments")
-      .insert(assignmentRows as Array<{ order_id: string | number; user_id: string | number }>);
-    assertNoError(assignmentError, "Error insertando asignaciones de pedidos");
-  }
+    if (assignmentRows.length > 0) {
+      const { error: assignmentError } = await db
+        .from("order_assignments")
+        .insert(assignmentRows as Array<{ order_id: string | number; user_id: string | number }>);
+      assertNoError(assignmentError, "Error insertando asignaciones de pedidos");
+    }
 
-  const itemRows = groupedProcesses.flatMap((process) =>
-    process.orders.flatMap((order) =>
-      order.items.map((item) => {
-        const dbOrderId = dbOrderIdByFrontendKey.get(`${process.id}::${order.id}`);
+    const itemRows = touchedEntries.flatMap((entry) =>
+      entry.order.items.map((item) => {
+        const dbOrderId = dbOrderIdByFrontendKey.get(`${entry.frontendProcessId}::${entry.frontendOrderId}`);
         if (!dbOrderId) {
           return null;
         }
@@ -1370,7 +1623,7 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
           description: item.description,
           batch: item.batch,
           entered_batch: item.enteredBatch || null,
-          batch_validation_status: item.batchValidationStatus || 'pending',
+          batch_validation_status: item.batchValidationStatus || "pending",
           expiry_date: item.expiryDate,
           production_date: item.productionDate,
           quantity: item.quantity,
@@ -1380,27 +1633,25 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
           status: item.status,
         };
       })
-    )
-  ).filter(Boolean);
+    ).filter(Boolean);
 
-  if (itemRows.length > 0) {
-    const { error: itemError } = await db
-      .from("order_items")
-      .insert(itemRows as Array<Record<string, unknown>>);
-    assertNoError(itemError, "Error insertando items de pedidos");
-  }
+    if (itemRows.length > 0) {
+      const { error: itemError } = await db
+        .from("order_items")
+        .insert(itemRows as Array<Record<string, unknown>>);
+      assertNoError(itemError, "Error insertando items de pedidos");
+    }
 
-  const boxRows = groupedProcesses.flatMap((process) =>
-    process.orders.flatMap((order) =>
-      (order.boxes || []).map((box) => {
-        const dbOrderId = dbOrderIdByFrontendKey.get(`${process.id}::${order.id}`);
+    const boxRows = touchedEntries.flatMap((entry) =>
+      (entry.order.boxes || []).map((box) => {
+        const dbOrderId = dbOrderIdByFrontendKey.get(`${entry.frontendProcessId}::${entry.frontendOrderId}`);
         if (!dbOrderId) {
           return null;
         }
 
         return {
-          frontendProcessId: process.id,
-          frontendOrderId: order.id,
+          frontendProcessId: entry.frontendProcessId,
+          frontendOrderId: entry.frontendOrderId,
           boxNumber: box.boxNumber,
           payload: {
             order_id: dbOrderId,
@@ -1408,31 +1659,29 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
           },
         };
       })
-    )
-  ).filter(Boolean) as Array<{ frontendProcessId: string; frontendOrderId: string; boxNumber: number; payload: { order_id: string | number; box_number: number } }>;
+    ).filter(Boolean) as Array<{ frontendProcessId: string; frontendOrderId: string; boxNumber: number; payload: { order_id: string | number; box_number: number } }>;
 
-  const dbBoxIdByFrontendKey = new Map<string, string | number>();
-  for (const row of boxRows) {
-    const { data: insertedBoxes, error: boxError } = await db
-      .from("order_boxes")
-      .insert(row.payload)
-      .select("id")
-      .limit(1);
-    assertNoError(boxError, "Error insertando cajas de pedidos");
+    const dbBoxIdByFrontendKey = new Map<string, string | number>();
+    for (const row of boxRows) {
+      const { data: insertedBoxes, error: boxError } = await db
+        .from("order_boxes")
+        .insert(row.payload)
+        .select("id")
+        .limit(1);
+      assertNoError(boxError, "Error insertando cajas de pedidos");
 
-    const insertedBox = insertedBoxes?.[0];
-    if (!insertedBox) {
-      throw new Error(`No se pudo recuperar el id de la caja ${row.boxNumber}.`);
+      const insertedBox = insertedBoxes?.[0];
+      if (!insertedBox) {
+        throw new Error(`No se pudo recuperar el id de la caja ${row.boxNumber}.`);
+      }
+
+      dbBoxIdByFrontendKey.set(`${row.frontendProcessId}::${row.frontendOrderId}::${row.boxNumber}`, insertedBox.id);
     }
 
-    dbBoxIdByFrontendKey.set(`${row.frontendProcessId}::${row.frontendOrderId}::${row.boxNumber}`, insertedBox.id);
-  }
-
-  const boxItemRows = groupedProcesses.flatMap((process) =>
-    process.orders.flatMap((order) =>
-      (order.boxes || []).flatMap((box) =>
+    const boxItemRows = touchedEntries.flatMap((entry) =>
+      (entry.order.boxes || []).flatMap((box) =>
         box.items.map((item) => {
-          const dbBoxId = dbBoxIdByFrontendKey.get(`${process.id}::${order.id}::${box.boxNumber}`);
+          const dbBoxId = dbBoxIdByFrontendKey.get(`${entry.frontendProcessId}::${entry.frontendOrderId}::${box.boxNumber}`);
           if (!dbBoxId) {
             return null;
           }
@@ -1447,14 +1696,14 @@ export const syncGroupedProcesses = async (groupedProcesses: GroupedOrder[], act
           };
         })
       )
-    )
-  ).filter(Boolean);
+    ).filter(Boolean);
 
-  if (boxItemRows.length > 0) {
-    const { error: boxItemError } = await db
-      .from("order_box_items")
-      .insert(boxItemRows as Array<Record<string, unknown>>);
-    assertNoError(boxItemError, "Error insertando items por caja");
+    if (boxItemRows.length > 0) {
+      const { error: boxItemError } = await db
+        .from("order_box_items")
+        .insert(boxItemRows as Array<Record<string, unknown>>);
+      assertNoError(boxItemError, "Error insertando items por caja");
+    }
   }
 
   const syncedProcessMap = new Map(

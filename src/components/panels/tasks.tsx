@@ -130,8 +130,15 @@ const TasksPanel = () => {
       return process;
     });
 
+    appData.setGroupedProcesses(updatedProcesses);
+
     void persistGroupedProcesses(updatedProcesses)
-      .then(() => appData.refresh())
+      .then((syncedProcesses) => {
+        if (Array.isArray(syncedProcesses)) {
+          appData.setGroupedProcesses(syncedProcesses);
+        }
+        return appData.refresh();
+      })
       .catch((error) => {
         console.error('No se pudo sincronizar tareas certificadas.', error);
       });
